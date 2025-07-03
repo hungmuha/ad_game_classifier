@@ -90,12 +90,11 @@ class CostOptimizedClassifier(nn.Module):
         super(CostOptimizedClassifier, self).__init__()
         # Smaller video backbone
         base_model = models.mobilenet_v2(pretrained=True)
-        # Remove some layers to make it lighter
         self.video_cnn = nn.Sequential(
-            *list(base_model.features)[:-4],  # Remove last 4 layers
+            *list(base_model.features),
             nn.AdaptiveAvgPool2d((1, 1))
         )
-        self.video_fc = nn.Linear(320, 128)  # Reduced from 1280->256 to 320->128
+        self.video_fc = nn.Linear(1280, 128)  # Full MobileNetV2 has 1280 features
 
         # Smaller audio branch
         self.audio_fc = nn.Sequential(

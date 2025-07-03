@@ -9,6 +9,7 @@ import time
 import psutil
 import gc
 from tqdm import tqdm
+from torch.utils.data import DataLoader, Subset
 
 # Import the training components
 from cost_optimized_train import (
@@ -87,7 +88,9 @@ def validate_data_structure():
             continue
         
         # Count video files
-        video_files = glob(os.path.join(path, "*.mp4"))
+        video_path = path+"/video"
+        audio_path = path+"/audio"
+        video_files = glob(os.path.join(video_path, "*.mp4"))
         print(f"  Found {len(video_files)} MP4 files")
         
         if len(video_files) == 0:
@@ -98,7 +101,7 @@ def validate_data_structure():
         wav_count = 0
         for vf in video_files[:5]:  # Check first 5 files
             base = os.path.splitext(os.path.basename(vf))[0]
-            wav_path = os.path.join(path, base + ".wav")
+            wav_path = os.path.join(audio_path, base + ".wav")
             if os.path.exists(wav_path):
                 wav_count += 1
         
@@ -224,7 +227,7 @@ def test_memory_usage():
     try:
         # Create dataset and dataloader
         dataset = CostOptimizedDataset(VIDEO_DIRS)
-        dataloader = torch.utils.data.DataLoader(
+        dataloader = DataLoader(
             dataset, 
             batch_size=TEST_BATCH_SIZE, 
             shuffle=True, 
@@ -293,10 +296,10 @@ def test_mini_training():
         # Limit dataset size for testing
         if len(dataset) > TEST_SAMPLES * 2:
             # Create a subset
-            indices = torch.randperm(len(dataset))[:TEST_SAMPLES * 2]
-            dataset = torch.utils.data.Subset(dataset, indices)
+            indices = torch.randperm(len(dataset))[:TEST_SAMPLES * 2].tolist()
+            dataset = Subset(dataset, indices)
         
-        dataloader = torch.utils.data.DataLoader(
+        dataloader = DataLoader(
             dataset, 
             batch_size=TEST_BATCH_SIZE, 
             shuffle=True, 

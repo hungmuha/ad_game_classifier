@@ -10,12 +10,35 @@
 
 ### 2. Code Preparation
 - [ ] All training scripts are ready (`cost_optimized_train.py`)
-- [ ] Dependencies are documented (`requirements_test.txt`)
+- [ ] `run_training.sh` script is created and tested locally
+- [ ] Dependencies are documented (`Pipfile` or `requirements.txt`)
 - [ ] Local testing completed successfully
 
 ## 🗂️ Step 1: Data Upload to S3
 
-### Option A: AWS CLI Upload (Recommended)
+### S3 Bucket Structure
+Your S3 bucket will contain both input data and output results:
+```
+s3://your-bucket-name/
+├── data/                    # Training data (input)
+│   ├── ads/
+│   │   ├── video/          # MP4 files
+│   │   └── audio/          # WAV files
+│   └── games/
+│       ├── video/          # MP4 files
+│       └── audio/          # WAV files
+└── results/                # Training results (output)
+    ├── 20241201_143022/    # Timestamped results
+    │   ├── cost_optimized_best.pth
+    │   ├── cost_optimized_final.pth
+    │   ├── training_20241201_143022.log
+    │   ├── gpu_monitor_20241201_143022.log
+    │   └── *.png           # Any plots
+    └── 20241201_155630/    # Another training run
+        └── ...
+```
+
+### Upload Training Data to S3:
 ```bash
 # Install AWS CLI
 pip install awscli
@@ -26,19 +49,14 @@ aws configure
 # Create S3 bucket
 aws s3 mb s3://your-ad-game-data-bucket
 
-# Upload data (this will take several hours for 200GB)
+# Upload training data (this will take several hours for 200GB)
 aws s3 sync data/ s3://your-ad-game-data-bucket/data/ --progress
 ```
 
-### Option B: AWS Console Upload
-1. Go to S3 Console
-2. Create new bucket
-3. Upload data folder through web interface
-4. Note: Slower for large datasets
-
-### Option C: AWS DataSync (For Very Large Datasets)
+### Alternative Upload Methods:
+1. **AWS Console Upload**: Use web interface (slower for large datasets)
+2. **AWS DataSync**: For very large datasets
 ```bash
-# Create DataSync task for efficient transfer
 aws datasync create-task \
   --source-location-arn arn:aws:datasync:region:account:location/loc-xxx \
   --destination-location-arn arn:aws:datasync:region:account:location/loc-yyy \
@@ -85,71 +103,69 @@ aws ec2 request-spot-instances \
 ssh -i your-key.pem ubuntu@your-instance-ip
 ```
 
-### Install Dependencies:
+### Download Code:
 ```bash
-# Update system
-sudo apt update && sudo apt upgrade -y
+# Clone your repository
+git clone https://github.com/your-repo/ad_game_classifier.git
+cd ad_game_classifier
 
-# Install Python dependencies
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install opencv-python librosa numpy tqdm psutil moviepy scikit-learn matplotlib
-
-# Install system dependencies
-sudo apt install -y ffmpeg libsndfile1
-```
-
-### Download Code and Data:
-```bash
-# Clone your repository or upload code
-git clone https://github.com/your-repo/ads-nfl-model.git
-cd ads-nfl-model/ad_game_classifier
-
-# Download data from S3
-aws s3 sync s3://your-ad-game-data-bucket/data/ data/
+# Make training script executable
+chmod +x run_training.sh
 ```
 
 ## 🎯 Step 4: Training Execution
 
-### Create Training Script:
+### The `run_training.sh` Script
+The repository now includes a comprehensive `run_training.sh` script that handles:
+- ✅ Environment setup and validation
+- ✅ Dependency installation (on AWS mode)
+- ✅ **S3 data download** (NEW!)
+- ✅ Data structure validation
+- ✅ GPU and system resource monitoring
+- ✅ Automatic results management
+- ✅ S3 results upload
+- ✅ Cost control with auto-stop
+
+### Run Training on AWS:
 ```bash
-# Create a training launcher script
-cat > run_training.sh << 'EOF'
-#!/bin/bash
-
-# Set environment variables
-export CUDA_VISIBLE_DEVICES=0
-export PYTHONPATH=$PYTHONPATH:$(pwd)
-
-# Monitor GPU usage
-nvidia-smi -l 1 &
-
-# Run training
-python cost_optimized_train.py
-
-# Save logs
-cp *.pth /tmp/  # Backup models
-EOF
-
-chmod +x run_training.sh
-```
-
-### Run Training:
-```bash
-# Start training
-./run_training.sh
+# Run with AWS mode and S3 bucket (downloads data automatically)
+./run_training.sh aws your-ad-game-data-bucket
 
 # Or run in background with logging
-nohup ./run_training.sh > training.log 2>&1 &
+nohup ./run_training.sh aws your-ad-game-data-bucket > training.log 2>&1 &
 
 # Monitor progress
 tail -f training.log
 ```
 
+### What the Script Does Automatically:
+1. **System Validation**: Checks GPU, memory, disk space
+2. **Dependency Installation**: Installs PyTorch, OpenCV, librosa, etc.
+3. **S3 Data Download**: Downloads training data from `s3://your-bucket/data/` to local `data/` directory
+4. **Data Validation**: Ensures proper data structure
+5. **Resource Monitoring**: Tracks GPU usage and system resources
+6. **Auto-Stop Setup**: Prevents runaway costs (20-hour limit)
+7. **Results Management**: Saves models, logs, and plots with timestamps
+8. **S3 Results Upload**: Uploads results to `s3://your-bucket/results/TIMESTAMP/`
+
+### S3 Data Download Features:
+- **Smart Download**: Only downloads if data doesn't already exist locally
+- **Progress Tracking**: Shows download progress for large datasets
+- **Error Handling**: Validates S3 bucket access and data existence
+- **Verification**: Confirms download completion and counts files
+
 ## 📊 Step 5: Monitoring & Cost Control
 
-### Monitor Training:
+### Built-in Monitoring:
+The `run_training.sh` script automatically provides:
+- **GPU Monitoring**: `nvidia-smi` logging to `gpu_monitor_TIMESTAMP.log`
+- **System Resources**: CPU, memory, and disk space tracking
+- **Training Progress**: Detailed logs with timestamps
+- **Cost Control**: Auto-stop after 20 hours
+
+### Additional Monitoring (Optional):
 ```bash
-# Check GPU usage
+# Check GPU usage in real-time
 watch -n 1 nvidia-smi
 
 # Check system resources
@@ -167,48 +183,33 @@ aws cloudwatch put-metric-alarm \
   --comparison-operator "GreaterThanThreshold"
 ```
 
-### Set Up Auto-Stop (Cost Control):
-```bash
-# Create auto-stop script
-cat > auto_stop.sh << 'EOF'
-#!/bin/bash
-
-# Stop instance after 20 hours (safety measure)
-sleep 72000  # 20 hours
-aws ec2 stop-instances --instance-ids $(curl -s http://169.254.169.254/latest/meta-data/instance-id)
-EOF
-
-chmod +x auto_stop.sh
-nohup ./auto_stop.sh &
-```
-
 ## 💾 Step 6: Model & Results Management
 
-### Save Results to S3:
-```bash
-# Create results backup script
-cat > save_results.sh << 'EOF'
-#!/bin/bash
+### Automatic Results Management:
+The `run_training.sh` script automatically:
+- Creates timestamped results directory (`results_TIMESTAMP/`)
+- Saves best and final models
+- Copies training logs and GPU monitoring data
+- Saves any generated plots or visualizations
+- Uploads everything to S3 at `s3://your-bucket/results/TIMESTAMP/`
 
-# Create timestamp
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-
-# Save models and logs
-aws s3 cp *.pth s3://your-ad-game-data-bucket/models/$TIMESTAMP/
-aws s3 cp training.log s3://your-ad-game-data-bucket/logs/$TIMESTAMP/
-aws s3 cp *.png s3://your-ad-game-data-bucket/plots/$TIMESTAMP/ 2>/dev/null || true
-
-echo "Results saved to S3 with timestamp: $TIMESTAMP"
-EOF
-
-chmod +x save_results.sh
+### Results Structure:
+```
+results_20241201_143022/
+├── cost_optimized_best.pth      # Best model during training
+├── cost_optimized_final.pth     # Final model
+├── training_20241201_143022.log # Training logs
+├── gpu_monitor_20241201_143022.log # GPU usage logs
+└── *.png                        # Any generated plots
 ```
 
 ### Download Results Locally:
 ```bash
-# Download from your local machine
-aws s3 sync s3://your-ad-game-data-bucket/models/ ./downloaded_models/
-aws s3 sync s3://your-ad-game-data-bucket/logs/ ./downloaded_logs/
+# Download results to your local machine
+aws s3 sync s3://your-ad-game-data-bucket/results/ ./downloaded_results/
+
+# Download specific training run
+aws s3 sync s3://your-ad-game-data-bucket/results/20241201_143022/ ./specific_run/
 ```
 
 ## 🔄 Step 7: Optimization & Scaling
@@ -283,7 +284,7 @@ aws ec2 authorize-security-group-ingress \
 
 ### Cost Optimization Tips:
 1. **Use Spot Instances**: 60-90% savings
-2. **Auto-stop**: Prevent runaway costs
+2. **Auto-stop**: Built into `run_training.sh` (20-hour limit)
 3. **Right-size storage**: Use GP3 instead of GP2
 4. **Monitor usage**: Set up CloudWatch alarms
 5. **Clean up**: Terminate instances when done
@@ -295,6 +296,7 @@ aws ec2 authorize-security-group-ingress \
 2. **Slow Data Loading**: Use more workers or SSD storage
 3. **GPU Driver Issues**: Use Deep Learning AMI
 4. **Network Timeouts**: Use larger instance types
+5. **S3 Access Issues**: Check IAM permissions and bucket name
 
 ### Debug Commands:
 ```bash
@@ -312,6 +314,32 @@ ping -c 3 s3.amazonaws.com
 
 # Check training logs
 tail -f training.log
+
+# Check script logs
+tail -f training_TIMESTAMP.log
+
+# Test S3 access
+aws s3 ls s3://your-bucket-name/
+
+# Check downloaded data
+ls -la data/ads/video/ | head -5
+ls -la data/games/video/ | head -5
+```
+
+### Script-Specific Troubleshooting:
+```bash
+# Test script locally first
+./run_training.sh local
+
+# Check script permissions
+ls -la run_training.sh
+
+# Validate data structure
+find data/ -name "*.mp4" | head -5
+find data/ -name "*.wav" | head -5
+
+# Check Python environment
+python -c "import torch; print(torch.cuda.is_available())"
 ```
 
 ## 📈 Performance Monitoring
@@ -332,4 +360,33 @@ pip install tensorboard wandb
 tensorboard --logdir=./logs --host=0.0.0.0 --port=6006
 ```
 
-This guide covers the complete AWS deployment process for your cost-optimized training script! 
+## 🚀 Quick Start Summary
+
+1. **Prepare Locally**: Test `./run_training.sh local`
+2. **Upload Data**: `aws s3 sync data/ s3://your-bucket/data/`
+3. **Launch EC2**: Use g4dn.xlarge with Deep Learning AMI
+4. **Download Code**: `git clone` your repository
+5. **Run Training**: `./run_training.sh aws your-bucket-name`
+6. **Monitor**: Check logs and S3 for results
+7. **Download Results**: `aws s3 sync s3://your-bucket/results/ ./results/`
+
+## 📝 Complete Example Workflow
+
+```bash
+# 1. Upload training data to S3 (one-time setup)
+aws s3 sync data/ s3://my-ml-bucket/data/
+
+# 2. Launch EC2 instance and connect
+ssh -i key.pem ubuntu@your-instance-ip
+
+# 3. Clone repository and run training
+git clone https://github.com/your-repo/ad_game_classifier.git
+cd ad_game_classifier
+chmod +x run_training.sh
+./run_training.sh aws my-ml-bucket
+
+# 4. Download results locally (optional)
+aws s3 sync s3://my-ml-bucket/results/ ./downloaded_results/
+```
+
+The `run_training.sh` script now handles the complete workflow from S3 data download to results upload, making AWS deployment much simpler!

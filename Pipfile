@@ -8,15 +8,16 @@ torch = "*"
 torchvision = "*"
 opencv-python = "*"
 librosa = "*"
-numpy = "*"
+numpy = "~=1.24.0"
 scikit-learn = "*"
 matplotlib = "*"
 moviepy = "*"
 pydub = "*"
 tqdm = "*"
-psutil = "*
+psutil = "*"
 
 [dev-packages]
 
 [requires]
 python_version = "3.11"
+
