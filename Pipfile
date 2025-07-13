@@ -15,9 +15,9 @@ moviepy = "*"
 pydub = "*"
 tqdm = "*"
 psutil = "*"
+boto3 = "*"
 
 [dev-packages]
 
 [requires]
 python_version = "3.11"
-
