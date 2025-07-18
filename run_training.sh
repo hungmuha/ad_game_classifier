@@ -95,16 +95,6 @@ download_data_from_s3() {
     if [ "$1" = "aws" ] && command -v aws &> /dev/null; then
         log "Checking if data needs to be downloaded from S3..."
         
-        # Check if data already exists locally
-        if [ -d "data/ads/video" ] && [ -d "data/games/video" ]; then
-            log "Data directories already exist locally. Skipping S3 download."
-            return 0
-        fi
-        
-        log "Downloading data from S3..."
-        log "S3 Bucket: $S3_BUCKET_NAME"
-        log "S3 Path: s3://$S3_BUCKET_NAME/$S3_DATA_PATH/"
-        
         # Check if bucket exists and is accessible
         if ! aws s3 ls "s3://$S3_BUCKET_NAME" >/dev/null 2>&1; then
             log "ERROR: Cannot access S3 bucket '$S3_BUCKET_NAME'"
@@ -123,20 +113,76 @@ download_data_from_s3() {
             exit 1
         fi
         
-        # Download data (removed --progress flag)
-        log "Starting data download (this may take several hours for large datasets)..."
-        aws s3 sync "s3://$S3_BUCKET_NAME/$S3_DATA_PATH/" "data/"
+        # Create local data directory if it doesn't exist
+        mkdir -p "data"
+        
+        # Function to check if a file exists locally and has same size as S3
+        check_file_exists() {
+            local s3_path="$1"
+            local local_path="$2"
+            
+            # Check if local file exists
+            if [ ! -f "$local_path" ]; then
+                return 1  # File doesn't exist locally
+            fi
+            
+            # Get S3 file size
+            local s3_size=$(aws s3 ls "$s3_path" 2>/dev/null | awk '{print $3}')
+            if [ -z "$s3_size" ]; then
+                return 1  # Can't get S3 size
+            fi
+            
+            # Get local file size
+            local local_size=$(stat -c%s "$local_path" 2>/dev/null || stat -f%z "$local_path" 2>/dev/null)
+            if [ -z "$local_size" ]; then
+                return 1  # Can't get local size
+            fi
+            
+            # Compare sizes
+            if [ "$s3_size" = "$local_size" ]; then
+                return 0  # Files match
+            else
+                return 1  # Sizes don't match
+            fi
+        }
+        
+        # Download with intelligent sync
+        log "Starting intelligent S3 sync (will skip existing files)..."
+        log "S3 Bucket: $S3_BUCKET_NAME"
+        log "S3 Path: s3://$S3_BUCKET_NAME/$S3_DATA_PATH/"
+        
+        # Use aws s3 sync with --size-only flag for better efficiency
+        # This will only download files that don't exist or have different sizes
+        aws s3 sync "s3://$S3_BUCKET_NAME/$S3_DATA_PATH/" "data/" --size-only
         
         # Verify download
         if [ -d "data/ads/video" ] && [ -d "data/games/video" ]; then
-            log "Data download completed successfully!"
+            log "Data sync completed successfully!"
             
-            # Count downloaded files
-            AD_VIDEOS=$(find data/ads/video -name "*.mp4" | wc -l)
-            GAME_VIDEOS=$(find data/games/video -name "*.mp4" | wc -l)
-            log "Downloaded: $AD_VIDEOS ad videos, $GAME_VIDEOS game videos"
+            # Count files and show detailed statistics
+            AD_VIDEOS=$(find data/ads/video -name "*.mp4" 2>/dev/null | wc -l)
+            GAME_VIDEOS=$(find data/games/video -name "*.mp4" 2>/dev/null | wc -l)
+            AD_AUDIOS=$(find data/ads/audio -name "*.wav" 2>/dev/null | wc -l)
+            GAME_AUDIOS=$(find data/games/audio -name "*.wav" 2>/dev/null | wc -l)
+            
+            log "Local files found:"
+            log "  - $AD_VIDEOS ad videos"
+            log "  - $GAME_VIDEOS game videos"
+            log "  - $AD_AUDIOS ad audios"
+            log "  - $GAME_AUDIOS game audios"
+            
+            # Calculate total size of downloaded data
+            if command -v du &> /dev/null; then
+                TOTAL_SIZE=$(du -sh data/ 2>/dev/null | cut -f1)
+                log "Total data size: $TOTAL_SIZE"
+            fi
+            
+            # Show cost savings information
+            log "Cost optimization: Only new/changed files were downloaded"
+            log "This saves significant S3 transfer costs on subsequent runs"
+            
         else
-            log "ERROR: Data download failed or incomplete"
+            log "ERROR: Data sync failed or incomplete"
             exit 1
         fi
     else
