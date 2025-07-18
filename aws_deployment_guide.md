@@ -77,11 +77,11 @@ aws datasync create-task \
 ```bash
 # Launch instance with Deep Learning AMI
 aws ec2 run-instances \
-  --image-id ami-0c02fb55956c7d316 \
+  --image-id ami-001e3e7725d51f534 \
   --instance-type g4dn.xlarge \
-  --key-name your-key-pair \
-  --security-group-ids sg-xxxxxxxxx \
-  --subnet-id subnet-xxxxxxxxx \
+  --key-name ad-game-training-key \
+  --security-group-ids sg-00ae53cbd052a01de \
+  --subnet-id subnet-0403bac7f98bc9edb \
   --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":100,"VolumeType":"gp3"}}]' \
   --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=ad-game-training}]'
 ```
