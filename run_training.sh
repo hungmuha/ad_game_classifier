@@ -82,6 +82,9 @@ download_data_from_s3() {
         log "S3 Bucket: $S3_BUCKET_NAME"
         log "S3 Path: s3://$S3_BUCKET_NAME/$S3_DATA_PATH/"
         
+        # Create data directory if it doesn't exist
+        mkdir -p data/
+        
         # Check if bucket exists and is accessible
         if ! aws s3 ls "s3://$S3_BUCKET_NAME" >/dev/null 2>&1; then
             log "ERROR: Cannot access S3 bucket '$S3_BUCKET_NAME'"

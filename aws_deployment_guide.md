@@ -141,10 +141,8 @@ tail -f training.log
 
 #### **Option B: Local Data (Speed Optimized)**
 ```bash
-# Download data to EC2 first (one-time cost: ~$90)
-aws s3 sync s3://your-ad-game-data-bucket/data/ data/
-
 # Run training with local data
+# auto download data from S3
 ./run_training.sh aws your-ad-game-data-bucket
 ```
 
