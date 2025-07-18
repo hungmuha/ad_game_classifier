@@ -199,12 +199,12 @@ class CostOptimizedClassifier(nn.Module):
             nn.Linear(64, 32)
         )
 
-        # Simple fusion
+        # Simple fusion - remove sigmoid since we're using BCEWithLogitsLoss
         self.classifier = nn.Sequential(
             nn.Linear(128 + 32, 64),
             nn.ReLU(),
-            nn.Linear(64, 1),
-            nn.Sigmoid()
+            nn.Linear(64, 1)
+            # Removed nn.Sigmoid() since BCEWithLogitsLoss handles it
         )
 
     def forward(self, video, audio):
@@ -224,24 +224,23 @@ def train_s3_streaming():
     dataset = S3StreamingDataset(S3_BUCKET, S3_DATA_PREFIX)
     
     # Calculate approximate steps per epoch
-    # Since we can't get exact length, estimate based on known data size
-    # You can adjust this based on your actual dataset size
-    estimated_samples = len(dataset.samples)  # This should work since samples is a list
+    estimated_samples = len(dataset.samples)
     steps_per_epoch = estimated_samples // BATCH_SIZE
     
     # Use IterableDataset with DataLoader
     dataloader = DataLoader(
         dataset, 
         batch_size=BATCH_SIZE, 
-        num_workers=2,  # Reduced for S3 streaming
+        num_workers=2,
         pin_memory=True
     )
 
     model = CostOptimizedClassifier().to(DEVICE)
-    criterion = nn.BCELoss()
+    # Change from BCELoss to BCEWithLogitsLoss
+    criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     
-    # Learning rate scheduler - use calculated steps_per_epoch
+    # Learning rate scheduler
     scheduler = optim.lr_scheduler.OneCycleLR(
         optimizer, 
         max_lr=LEARNING_RATE, 
