@@ -11,7 +11,25 @@ set -e  # Exit on any error
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="training_${TIMESTAMP}.log"
+
+# Create organized logging directory structure
+LOGGING_DIR="logging"
+mkdir -p "$LOGGING_DIR"
+
+# Create timestamped session directory
+SESSION_DIR="$LOGGING_DIR/session_${TIMESTAMP}"
+mkdir -p "$SESSION_DIR"
+
+# Create subdirectories for different types of logs
+mkdir -p "$SESSION_DIR/training"
+mkdir -p "$SESSION_DIR/monitoring"
+mkdir -p "$SESSION_DIR/system"
+mkdir -p "$SESSION_DIR/results"
+
+# Log file paths
+LOG_FILE="$SESSION_DIR/training/training_${TIMESTAMP}.log"
+GPU_LOG_FILE="$SESSION_DIR/monitoring/gpu_monitor_${TIMESTAMP}.log"
+SYSTEM_LOG_FILE="$SESSION_DIR/system/system_${TIMESTAMP}.log"
 
 # S3 Configuration
 S3_BUCKET_NAME="${2:-your-ad-game-data-bucket}"  # Can be passed as second argument
@@ -26,22 +44,27 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
+# Function to log system info
+log_system() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$SYSTEM_LOG_FILE"
+}
+
 # Function to check GPU
 check_gpu() {
     if command -v nvidia-smi &> /dev/null; then
-        log "GPU detected:"
-        nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits
+        log_system "GPU detected:"
+        nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits | tee -a "$SYSTEM_LOG_FILE"
     else
-        log "No GPU detected, will use CPU"
+        log_system "No GPU detected, will use CPU"
     fi
 }
 
 # Function to check system resources
 check_resources() {
-    log "System resources:"
-    log "CPU cores: $(nproc)"
-    log "Memory: $(free -h | grep Mem | awk '{print $2}')"
-    log "Disk space: $(df -h . | tail -1 | awk '{print $4}') available"
+    log_system "System resources:"
+    log_system "CPU cores: $(nproc)"
+    log_system "Memory: $(free -h | grep Mem | awk '{print $2}')"
+    log_system "Disk space: $(df -h . | tail -1 | awk '{print $4}') available"
 }
 
 # Function to install dependencies
@@ -82,9 +105,6 @@ download_data_from_s3() {
         log "S3 Bucket: $S3_BUCKET_NAME"
         log "S3 Path: s3://$S3_BUCKET_NAME/$S3_DATA_PATH/"
         
-        # Create data directory if it doesn't exist
-        mkdir -p data/
-        
         # Check if bucket exists and is accessible
         if ! aws s3 ls "s3://$S3_BUCKET_NAME" >/dev/null 2>&1; then
             log "ERROR: Cannot access S3 bucket '$S3_BUCKET_NAME'"
@@ -103,9 +123,9 @@ download_data_from_s3() {
             exit 1
         fi
         
-        # Download data with progress
+        # Download data (removed --progress flag)
         log "Starting data download (this may take several hours for large datasets)..."
-        aws s3 sync "s3://$S3_BUCKET_NAME/$S3_DATA_PATH/" "data/" --progress
+        aws s3 sync "s3://$S3_BUCKET_NAME/$S3_DATA_PATH/" "data/"
         
         # Verify download
         if [ -d "data/ads/video" ] && [ -d "data/games/video" ]; then
@@ -211,8 +231,9 @@ validate_data() {
 start_monitoring() {
     if command -v nvidia-smi &> /dev/null; then
         log "Starting GPU monitoring..."
-        nvidia-smi -l 1 > "gpu_monitor_${TIMESTAMP}.log" &
+        nvidia-smi -l 1 > "$GPU_LOG_FILE" &
         GPU_MONITOR_PID=$!
+        log "GPU monitoring PID: $GPU_MONITOR_PID"
     fi
 }
 
@@ -228,8 +249,8 @@ stop_monitoring() {
 save_results() {
     log "Saving results..."
     
-    # Create results directory
-    RESULTS_DIR="results_${TIMESTAMP}"
+    # Create results directory within session
+    RESULTS_DIR="$SESSION_DIR/results"
     mkdir -p "$RESULTS_DIR"
     
     # Copy model files
@@ -253,19 +274,43 @@ save_results() {
         log "Saved S3 streaming final model: s3_streaming_final.pth"
     fi
     
-    # Copy logs
-    cp "$LOG_FILE" "$RESULTS_DIR/"
-    if [ -f "gpu_monitor_${TIMESTAMP}.log" ]; then
-        cp "gpu_monitor_${TIMESTAMP}.log" "$RESULTS_DIR/"
-    fi
-    
     # Copy any plots or visualizations
     if ls *.png 1> /dev/null 2>&1; then
         cp *.png "$RESULTS_DIR/"
         log "Saved plots"
     fi
     
+    # Create session summary
+    cat > "$SESSION_DIR/session_summary.txt" << EOF
+Training Session Summary
+=======================
+Session ID: ${TIMESTAMP}
+Start Time: $(date)
+Mode: ${1:-local}
+S3 Bucket: $S3_BUCKET_NAME
+
+Files Created:
+- Training Log: $LOG_FILE
+- GPU Monitor: $GPU_LOG_FILE
+- System Log: $SYSTEM_LOG_FILE
+- Results: $RESULTS_DIR/
+
+Directory Structure:
+$SESSION_DIR/
+├── training/
+│   └── training_${TIMESTAMP}.log
+├── monitoring/
+│   └── gpu_monitor_${TIMESTAMP}.log
+├── system/
+│   └── system_${TIMESTAMP}.log
+└── results/
+    └── [model files and plots]
+
+EOF
+
     log "Results saved to: $RESULTS_DIR"
+    log "Session summary: $SESSION_DIR/session_summary.txt"
+    log "All logs available in: $SESSION_DIR/"
 }
 
 # Function to upload to S3 (AWS only)
@@ -275,7 +320,7 @@ upload_to_s3() {
             log "Uploading results to S3..."
             
             if [ "$S3_BUCKET_NAME" != "your-ad-game-data-bucket" ]; then
-                aws s3 cp "$RESULTS_DIR" "s3://$S3_BUCKET_NAME/results/$TIMESTAMP/" --recursive
+                aws s3 cp "$SESSION_DIR" "s3://$S3_BUCKET_NAME/results/$TIMESTAMP/" --recursive
                 log "Results uploaded to s3://$S3_BUCKET_NAME/results/$TIMESTAMP/"
             else
                 log "WARNING: S3 bucket name not configured. Skipping upload."
@@ -329,6 +374,7 @@ main() {
     log "Mode: $mode"
     log "S3 Bucket: $S3_BUCKET_NAME"
     log "Timestamp: $TIMESTAMP"
+    log "Session Directory: $SESSION_DIR"
     log "========================================"
     
     # Change to script directory
@@ -372,8 +418,9 @@ main() {
     
     log "========================================"
     log "Training completed successfully!"
-    log "Check results in: $RESULTS_DIR"
-    log "Check logs in: $LOG_FILE"
+    log "Check results in: $SESSION_DIR/results/"
+    log "Check logs in: $SESSION_DIR/"
+    log "Session summary: $SESSION_DIR/session_summary.txt"
     log "========================================"
 }
 
@@ -408,6 +455,14 @@ case "${1:-local}" in
         echo "S3 Data Setup:"
         echo "  1. Upload data: aws s3 sync data/ s3://your-bucket/data/"
         echo "  2. Run training: $0 s3-streaming your-bucket"
+        echo ""
+        echo "Logging Structure:"
+        echo "  logging/"
+        echo "  └── session_TIMESTAMP/"
+        echo "      ├── training/     # Training logs"
+        echo "      ├── monitoring/   # GPU/system monitoring"
+        echo "      ├── system/       # System info logs"
+        echo "      └── results/      # Model files and plots"
         ;;
     *)
         echo "Unknown option: $1"

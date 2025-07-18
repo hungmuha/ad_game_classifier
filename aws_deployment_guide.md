@@ -29,11 +29,11 @@ s3://your-bucket-name/
 │       └── audio/          # WAV files
 └── results/                # Training results (output)
     ├── 20241201_143022/    # Timestamped results
-    │   ├── s3_streaming_best.pth
-    │   ├── s3_streaming_final.pth
-    │   ├── training_20241201_143022.log
-    │   ├── gpu_monitor_20241201_143022.log
-    │   └── *.png           # Any plots
+    │   ├── training/       # Training logs
+    │   ├── monitoring/     # GPU/system monitoring
+    │   ├── system/         # System info logs
+    │   ├── results/        # Model files and plots
+    │   └── session_summary.txt
     └── 20241201_155630/    # Another training run
         └── ...
 ```
@@ -50,7 +50,7 @@ aws configure
 aws s3 mb s3://your-ad-game-data-bucket
 
 # Upload training data (this will take several hours for 200GB)
-aws s3 sync data/ s3://your-ad-game-data-bucket/data/ --progress
+aws s3 sync data/ s3://your-ad-game-data-bucket/data/
 ```
 
 ### Alternative Upload Methods:
@@ -110,7 +110,7 @@ git clone https://github.com/your-repo/ad_game_classifier.git
 cd ad_game_classifier
 
 # Make training script executable
-chmod +x run_training.sh
+chmod +x run_training.sh monitor_training.sh check_progress.py
 ```
 
 ## 🎯 Step 4: Training Execution
@@ -157,175 +157,200 @@ tail -f training.log
 
 ### Enhanced Logging & Monitoring
 
-The updated training scripts now include comprehensive logging and monitoring:
+The updated training scripts now include comprehensive logging and monitoring with organized directory structure:
+
+#### **New Organized Logging Structure:**
+```
+logging/
+└── session_20241201_143022/
+    ├── training/
+    │   └── training_20241201_143022.log
+    ├── monitoring/
+    │   ├── gpu_monitor_20241201_143022.log
+    │   ├── training_monitor_20241201_143022.log
+    │   └── progress_checker_20241201_143022.log
+    ├── system/
+    │   └── system_20241201_143022.log
+    ├── results/
+    │   ├── cost_optimized_best.pth
+    │   ├── cost_optimized_final.pth
+    │   └── *.png
+    └── session_summary.txt
+```
 
 #### **Automatic Logging Features:**
-- **Detailed logs**: `logs/training_TIMESTAMP.log`
-- **Progress tracking**: `logs/training_TIMESTAMP_progress.json`
-- **Model checkpoints**: Saved for each epoch
-- **Real-time monitoring**: GPU usage, memory, disk space
+- **Organized logs**: All logs organized by type in timestamped sessions
+- **Training logs**: Detailed iteration-level training progress
+- **GPU monitoring**: Real-time GPU usage and temperature tracking
+- **System monitoring**: CPU, memory, and disk usage
+- **Progress tracking**: JSON-based progress summaries
+- **Session summaries**: Complete session overview with file locations
 
-#### **Monitoring Commands:**
+## 📊 Step 5: Monitoring & Progress Tracking
+
+### **Enhanced Monitoring System**
+
+The new monitoring system provides comprehensive tracking with organized logging:
+
+#### **1. Real-Time Monitoring Commands:**
+
 ```bash
-# Follow training logs in real-time
-tail -f logs/training_*.log
+# Start monitoring before training (in separate terminal)
+nohup nvidia-smi -l 1 > logging/session_*/monitoring/gpu_monitor_*.log &
+nohup ./monitor_training.sh &
+nohup ./check_progress.py --continuous &
 
-# Check progress summary
+# Start training
+./run_training.sh aws your-bucket-name
+```
+
+#### **2. Check Training Status:**
+
+```bash
+# Check if training is running
+ps aux | grep -E "(python.*train|s3_streaming_train|cost_optimized_train)"
+
+# Check GPU usage
+nvidia-smi
+
+# Check latest session
+ls -la logging/session_*/
+
+# Check training logs
+tail -f logging/session_*/training/training_*.log
+
+# Check GPU monitoring
+tail -f logging/session_*/monitoring/gpu_monitor_*.log
+```
+
+#### **3. Progress Tracking Scripts:**
+
+**`check_progress.py` - Comprehensive Status Check:**
+```bash
+# Single status check
 python check_progress.py
 
-# Monitor system resources
+# Continuous monitoring
+python check_progress.py --continuous
+
+# Check specific session
+python check_progress.py --session session_20241201_143022
+```
+
+**`monitor_training.sh` - Real-Time Monitoring:**
+```bash
+# Start monitoring
+./monitor_training.sh
+
+# Monitor in background
+nohup ./monitor_training.sh > monitoring.log 2>&1 &
+```
+
+#### **4. Monitoring Features:**
+
+**Training Process Monitoring:**
+- ✅ **Process tracking**: Monitors training process PID
+- ✅ **GPU utilization**: Real-time GPU usage and memory
+- ✅ **System resources**: CPU, memory, and disk usage
+- ✅ **Training progress**: Latest training output and logs
+- ✅ **Error detection**: Automatic error detection and logging
+
+**Logging Organization:**
+- ✅ **Session-based**: Each training run gets its own session directory
+- ✅ **Categorized logs**: Training, monitoring, system, and results separated
+- ✅ **Timestamped**: All files include timestamps for easy tracking
+- ✅ **Session summaries**: Complete overview of each training session
+
+#### **5. Monitoring Commands Summary:**
+
+```bash
+# Quick status check
+python check_progress.py
+
+# Continuous monitoring
+python check_progress.py --continuous
+
+# Monitor training process
 ./monitor_training.sh
 
 # Check GPU usage
 watch -n 10 nvidia-smi
+
+# Check all logs in current session
+tail -f logging/session_*/*.log
+
+# Check specific log types
+tail -f logging/session_*/training/*.log
+tail -f logging/session_*/monitoring/*.log
+tail -f logging/session_*/system/*.log
+
+# Check session summary
+cat logging/session_*/session_summary.txt
 ```
 
-#### **Progress Tracking Files:**
-```
-logs/
-├── training_20241201_143022.log          # Detailed training log
-├── training_20241201_143022_progress.json # Progress summary
-└── gpu_monitor_20241201_143022.log       # GPU usage log
-```
+#### **6. Monitoring Dashboard:**
 
-### What the Script Does Automatically:
-1. **System Validation**: Checks GPU, memory, disk space
-2. **Dependency Installation**: Installs PyTorch, OpenCV, librosa, boto3, etc.
-3. **Data Handling**: Downloads data (AWS mode) or streams from S3 (S3 streaming mode)
-4. **Data Validation**: Ensures proper data structure
-5. **Resource Monitoring**: Tracks GPU usage and system resources
-6. **Enhanced Logging**: Comprehensive progress tracking and logging
-7. **Results Management**: Saves models, logs, and plots with timestamps
-8. **S3 Results Upload**: Uploads results to `s3://your-bucket/results/TIMESTAMP/`
-
-## 📊 Step 5: Monitoring & Cost Control
-
-### Built-in Monitoring:
-The enhanced training scripts now provide:
-- **GPU Monitoring**: `nvidia-smi` logging to `gpu_monitor_TIMESTAMP.log`
-- **System Resources**: CPU, memory, and disk space tracking
-- **Training Progress**: Detailed logs with timestamps and JSON progress files
-- **Model Checkpoints**: Automatic saving of best models per epoch
-- **Real-time Logging**: Comprehensive iteration-level logging
-
-### Monitoring Scripts:
-
-#### **`monitor_training.sh`** - Quick Status Check:
 ```bash
-#!/bin/bash
-echo "=== Training Status ==="
-echo "Latest log file:"
-ls -t logs/training_*.log | head -1 | xargs tail -20
-
-echo ""
-echo "=== Progress Summary ==="
-echo "Latest progress file:"
-ls -t logs/training_*_progress.json | head -1 | xargs cat | python -m json.tool
-
-echo ""
-echo "=== GPU Status ==="
-nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv
-
-echo ""
-echo "=== System Resources ==="
-echo "Memory:"
-free -h
-echo "Disk:"
-df -h .
+# Create a monitoring dashboard
+echo "=== TRAINING MONITORING DASHBOARD ==="
+echo "Session: $(ls -t logging/session_*/ | head -1)"
+echo "Training Status: $(ps aux | grep -E "(python.*train)" | grep -v grep | wc -l) processes running"
+echo "GPU Usage: $(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits)%"
+echo "Latest Log: $(ls -t logging/session_*/training/*.log | head -1)"
+echo "====================================="
 ```
 
-#### **`check_progress.py`** - Detailed Progress Report:
-```python
-#!/usr/bin/env python3
-import json
-import glob
-import os
-from datetime import datetime
+### **What the Enhanced Scripts Do Automatically:**
 
-def check_progress():
-    # Find latest progress file
-    progress_files = glob.glob('logs/training_*_progress.json')
-    if not progress_files:
-        print("No progress files found!")
-        return
-    
-    latest_file = max(progress_files, key=os.path.getctime)
-    
-    with open(latest_file, 'r') as f:
-        data = json.load(f)
-    
-    print(f"=== Training Progress Report ===")
-    print(f"File: {latest_file}")
-    print(f"Start time: {data['start_time']}")
-    print(f"Best loss: {data['best_loss']:.4f}")
-    print(f"Epochs completed: {len(data['epochs'])}")
-    
-    if data['epochs']:
-        latest_epoch = data['epochs'][-1]
-        print(f"Latest epoch: {latest_epoch['epoch']}")
-        print(f"Latest loss: {latest_epoch['avg_loss']:.4f}")
-        print(f"Latest learning rate: {latest_epoch['learning_rate']:.6f}")
-        print(f"Latest epoch time: {latest_epoch['time']:.2f}s")
-    
-    print(f"\n=== Epoch History ===")
-    for epoch in data['epochs']:
-        print(f"Epoch {epoch['epoch']}: Loss={epoch['avg_loss']:.4f}, "
-              f"LR={epoch['learning_rate']:.6f}, Time={epoch['time']:.2f}s")
-
-if __name__ == "__main__":
-    check_progress()
-```
-
-### Additional Monitoring (Optional):
-```bash
-# Check GPU usage in real-time
-watch -n 1 nvidia-smi
-
-# Check system resources
-htop
-
-# Monitor costs (set up CloudWatch alarms)
-aws cloudwatch put-metric-alarm \
-  --alarm-name "TrainingCostAlarm" \
-  --alarm-description "Alert when training costs exceed threshold" \
-  --metric-name "EstimatedCharges" \
-  --namespace "AWS/Billing" \
-  --statistic "Maximum" \
-  --period 300 \
-  --threshold 10 \
-  --comparison-operator "GreaterThanThreshold"
-```
+1. **Organized Logging**: Creates structured logging directory with categorized logs
+2. **Session Management**: Each training run gets a unique session with timestamp
+3. **Real-Time Monitoring**: GPU, system resources, and training progress
+4. **Progress Tracking**: Detailed logs with timestamps and JSON summaries
+5. **Error Detection**: Automatic error logging and recovery suggestions
+6. **Results Management**: Organized model files, plots, and session summaries
+7. **S3 Integration**: Automatic upload of complete session data to S3
 
 ## 💾 Step 6: Model & Results Management
 
-### Automatic Results Management:
-The enhanced training scripts automatically:
-- Creates timestamped results directory (`results_TIMESTAMP/`)
-- Saves best and final models (`cost_optimized_best.pth`, `cost_optimized_final.pth`)
-- Copies training logs and GPU monitoring data
-- Saves progress tracking JSON files
-- Saves any generated plots or visualizations
-- Uploads everything to S3 at `s3://your-bucket/results/TIMESTAMP/`
+### **Enhanced Results Management:**
 
-### Results Structure:
+The updated training scripts automatically create organized results:
+
+#### **Results Structure:**
 ```
-results_20241201_143022/
-├── cost_optimized_best_epoch_1.pth      # Best model from epoch 1
-├── cost_optimized_best_epoch_2.pth      # Best model from epoch 2
-├── cost_optimized_final.pth             # Final model
-├── training_20241201_143022.log         # Training logs
-├── training_20241201_143022_progress.json # Progress tracking
-├── gpu_monitor_20241201_143022.log      # GPU usage logs
-└── *.png                                # Any generated plots
+logging/session_20241201_143022/
+├── training/
+│   └── training_20241201_143022.log
+├── monitoring/
+│   ├── gpu_monitor_20241201_143022.log
+│   ├── training_monitor_20241201_143022.log
+│   └── progress_checker_20241201_143022.log
+├── system/
+│   └── system_20241201_143022.log
+├── results/
+│   ├── cost_optimized_best.pth
+│   ├── cost_optimized_final.pth
+│   └── *.png
+└── session_summary.txt
 ```
 
-### Download Results Locally:
+#### **Automatic Features:**
+- ✅ **Session-based organization**: Each training run in its own directory
+- ✅ **Complete logging**: All logs, models, and monitoring data preserved
+- ✅ **Session summaries**: Overview of each training session
+- ✅ **S3 upload**: Complete session data uploaded to S3
+- ✅ **Timestamped files**: All files include timestamps for tracking
+
+### **Download Results Locally:**
 ```bash
-# Download results to your local machine
-aws s3 sync s3://your-ad-game-data-bucket/results/ ./downloaded_results/
+# Download complete session results
+aws s3 sync s3://your-ad-game-data-bucket/results/session_20241201_143022/ ./downloaded_session/
 
-# Download specific training run
-aws s3 sync s3://your-ad-game-data-bucket/results/20241201_143022/ ./specific_run/
+# Download specific session
+aws s3 sync s3://your-ad-game-data-bucket/results/session_20241201_143022/ ./specific_session/
+
+# Download all results
+aws s3 sync s3://your-ad-game-data-bucket/results/ ./all_results/
 ```
 
 ## 🔄 Step 7: Optimization & Scaling
@@ -436,7 +461,7 @@ free -h
 ping -c 3 s3.amazonaws.com
 
 # Check training logs
-tail -f logs/training_*.log
+tail -f logging/session_*/training/*.log
 
 # Check progress
 python check_progress.py
@@ -460,10 +485,14 @@ python -c "import boto3; print('boto3 available')"
 ./run_training.sh aws your-bucket-name
 
 # Check script permissions
-ls -la run_training.sh
+ls -la run_training.sh monitor_training.sh check_progress.py
 
 # Check Python environment
 python -c "import torch; print(torch.cuda.is_available())"
+
+# Check monitoring scripts
+./monitor_training.sh
+python check_progress.py
 ```
 
 ## 📈 Performance Monitoring
@@ -482,10 +511,13 @@ python -c "import torch; print(torch.cuda.is_available())"
 pip install tensorboard wandb
 
 # Start TensorBoard
-tensorboard --logdir=./logs --host=0.0.0.0 --port=6006
+tensorboard --logdir=./logging --host=0.0.0.0 --port=6006
 
 # Monitor training progress
 watch -n 300 python check_progress.py
+
+# Monitor specific session
+python check_progress.py --session session_20241201_143022
 ```
 
 ## 🚀 Quick Start Summary
@@ -494,11 +526,12 @@ watch -n 300 python check_progress.py
 2. **Upload Data**: `aws s3 sync data/ s3://your-bucket/data/`
 3. **Launch EC2**: Use g4dn.xlarge with Deep Learning AMI
 4. **Download Code**: `git clone` your repository
-5. **Choose Approach**:
+5. **Setup Monitoring**: Start monitoring scripts in separate terminals
+6. **Choose Approach**:
    - **Fast**: `./run_training.sh aws your-bucket-name` (download data first)
    - **Cost-optimized**: `./run_training.sh s3-streaming your-bucket-name`
-6. **Monitor**: Use enhanced logging and monitoring scripts
-7. **Download Results**: `aws s3 sync s3://your-bucket/results/ ./results/`
+7. **Monitor**: Use enhanced logging and monitoring scripts
+8. **Download Results**: `aws s3 sync s3://your-bucket/results/ ./results/`
 
 ## 📝 Complete Example Workflow
 
@@ -510,20 +543,29 @@ aws s3 sync data/ s3://my-ml-bucket/data/
 # 2. Launch EC2 instance and connect
 ssh -i key.pem ubuntu@your-instance-ip
 
-# 3. Clone repository and download data
+# 3. Clone repository and setup monitoring
 git clone https://github.com/your-repo/ad_game_classifier.git
 cd ad_game_classifier
-chmod +x run_training.sh
-aws s3 sync s3://my-ml-bucket/data/ data/
+chmod +x run_training.sh monitor_training.sh check_progress.py
 
-# 4. Run training with enhanced logging
+# 4. Start monitoring (in separate terminals)
+# Terminal 1: GPU monitoring
+nohup nvidia-smi -l 1 > logging/session_*/monitoring/gpu_monitor_*.log &
+
+# Terminal 2: Training monitoring
+nohup ./monitor_training.sh &
+
+# Terminal 3: Progress checking
+nohup python check_progress.py --continuous &
+
+# 5. Run training with enhanced logging
 ./run_training.sh aws my-ml-bucket
 
-# 5. Monitor progress
-tail -f logs/training_*.log
+# 6. Monitor progress
+tail -f logging/session_*/training/*.log
 python check_progress.py
 
-# 6. Download results locally
+# 7. Download results locally
 aws s3 sync s3://my-ml-bucket/results/ ./downloaded_results/
 ```
 
@@ -535,18 +577,47 @@ aws s3 sync data/ s3://my-ml-bucket/data/
 # 2. Launch EC2 instance and connect
 ssh -i key.pem ubuntu@your-instance-ip
 
-# 3. Clone repository and run training
+# 3. Clone repository and setup monitoring
 git clone https://github.com/your-repo/ad_game_classifier.git
 cd ad_game_classifier
-chmod +x run_training.sh
+chmod +x run_training.sh monitor_training.sh check_progress.py
+
+# 4. Start monitoring (in separate terminals)
+# Terminal 1: GPU monitoring
+nohup nvidia-smi -l 1 > logging/session_*/monitoring/gpu_monitor_*.log &
+
+# Terminal 2: Training monitoring
+nohup ./monitor_training.sh &
+
+# Terminal 3: Progress checking
+nohup python check_progress.py --continuous &
+
+# 5. Run training with enhanced logging
 ./run_training.sh s3-streaming my-ml-bucket
 
-# 4. Monitor progress
-tail -f logs/training_*.log
+# 6. Monitor progress
+tail -f logging/session_*/training/*.log
 python check_progress.py
 
-# 5. Download results locally
+# 7. Download results locally
 aws s3 sync s3://my-ml-bucket/results/ ./downloaded_results/
 ```
 
-The enhanced training scripts now provide comprehensive logging, monitoring, and progress tracking, making it much easier to track training progress and optimize performance!
+### **Monitoring Dashboard Commands:**
+```bash
+# Quick status overview
+echo "=== TRAINING MONITORING DASHBOARD ==="
+echo "Session: $(ls -t logging/session_*/ | head -1)"
+echo "Training Status: $(ps aux | grep -E "(python.*train)" | grep -v grep | wc -l) processes running"
+echo "GPU Usage: $(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits)%"
+echo "Latest Log: $(ls -t logging/session_*/training/*.log | head -1)"
+echo "====================================="
+
+# Check session summary
+cat logging/session_*/session_summary.txt
+
+# Monitor all logs
+tail -f logging/session_*/*.log
+```
+
+The enhanced training scripts now provide comprehensive logging, monitoring, and progress tracking with organized directory structure, making it much easier to track training progress and optimize performance!
