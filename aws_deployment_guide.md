@@ -115,18 +115,9 @@ chmod +x run_training.sh
 
 ## 🎯 Step 4: Training Execution
 
-### The `run_training.sh` Script
-The repository now includes a comprehensive `run_training.sh` script that handles:
-- ✅ Environment setup and validation
-- ✅ Dependency installation (on AWS mode)
-- ✅ **S3 streaming** (NEW! - No data download needed!)
-- ✅ Data structure validation
-- ✅ GPU and system resource monitoring
-- ✅ Automatic results management
-- ✅ S3 results upload
-- ✅ Cost control with auto-stop
+### Training Approaches
 
-### Run Training on AWS (Cost Optimized):
+#### **Option A: S3 Streaming (Cost Optimized)**
 ```bash
 # Run with S3 streaming mode (NO data download!)
 ./run_training.sh s3-streaming your-ad-game-data-bucket
@@ -138,31 +129,154 @@ nohup ./run_training.sh s3-streaming your-ad-game-data-bucket > training.log 2>&
 tail -f training.log
 ```
 
+**Pros:**
+- ✅ No data transfer costs ($0-5 vs $90-100)
+- ✅ Immediate start (no download wait)
+- ✅ Works with any dataset size
+
+**Cons:**
+- ❌ Slower training (36s/iteration)
+- ❌ Network dependent
+- ❌ Higher total compute cost
+
+#### **Option B: Local Data (Speed Optimized)**
+```bash
+# Download data to EC2 first (one-time cost: ~$90)
+aws s3 sync s3://your-ad-game-data-bucket/data/ data/
+
+# Run training with local data
+./run_training.sh aws your-ad-game-data-bucket
+```
+
+**Pros:**
+- ✅ Much faster training (4-7s/iteration)
+- ✅ More reliable (no network dependency)
+- ✅ Lower total cost ($111 vs $135-140)
+
+**Cons:**
+- ❌ One-time data transfer cost ($90)
+- ❌ Requires local storage space
+
+### Enhanced Logging & Monitoring
+
+The updated training scripts now include comprehensive logging and monitoring:
+
+#### **Automatic Logging Features:**
+- **Detailed logs**: `logs/training_TIMESTAMP.log`
+- **Progress tracking**: `logs/training_TIMESTAMP_progress.json`
+- **Model checkpoints**: Saved for each epoch
+- **Real-time monitoring**: GPU usage, memory, disk space
+
+#### **Monitoring Commands:**
+```bash
+# Follow training logs in real-time
+tail -f logs/training_*.log
+
+# Check progress summary
+python check_progress.py
+
+# Monitor system resources
+./monitor_training.sh
+
+# Check GPU usage
+watch -n 10 nvidia-smi
+```
+
+#### **Progress Tracking Files:**
+```
+logs/
+├── training_20241201_143022.log          # Detailed training log
+├── training_20241201_143022_progress.json # Progress summary
+└── gpu_monitor_20241201_143022.log       # GPU usage log
+```
+
 ### What the Script Does Automatically:
 1. **System Validation**: Checks GPU, memory, disk space
 2. **Dependency Installation**: Installs PyTorch, OpenCV, librosa, boto3, etc.
-3. **S3 Streaming**: Processes data directly from S3 (no download needed!)
-4. **Data Validation**: Ensures proper data structure in S3
+3. **Data Handling**: Downloads data (AWS mode) or streams from S3 (S3 streaming mode)
+4. **Data Validation**: Ensures proper data structure
 5. **Resource Monitoring**: Tracks GPU usage and system resources
-6. **Auto-Stop Setup**: Prevents runaway costs (20-hour limit)
+6. **Enhanced Logging**: Comprehensive progress tracking and logging
 7. **Results Management**: Saves models, logs, and plots with timestamps
 8. **S3 Results Upload**: Uploads results to `s3://your-bucket/results/TIMESTAMP/`
-
-### S3 Streaming Features:
-- **No Data Download**: Processes data directly from S3
-- **Cost Optimized**: Eliminates $180-200 data transfer costs
-- **Immediate Start**: No hours of data transfer wait
-- **Scalable**: Works with any dataset size
-- **Error Handling**: Validates S3 bucket access and data existence
 
 ## 📊 Step 5: Monitoring & Cost Control
 
 ### Built-in Monitoring:
-The `run_training.sh` script automatically provides:
+The enhanced training scripts now provide:
 - **GPU Monitoring**: `nvidia-smi` logging to `gpu_monitor_TIMESTAMP.log`
 - **System Resources**: CPU, memory, and disk space tracking
-- **Training Progress**: Detailed logs with timestamps
-- **Cost Control**: Auto-stop after 20 hours
+- **Training Progress**: Detailed logs with timestamps and JSON progress files
+- **Model Checkpoints**: Automatic saving of best models per epoch
+- **Real-time Logging**: Comprehensive iteration-level logging
+
+### Monitoring Scripts:
+
+#### **`monitor_training.sh`** - Quick Status Check:
+```bash
+#!/bin/bash
+echo "=== Training Status ==="
+echo "Latest log file:"
+ls -t logs/training_*.log | head -1 | xargs tail -20
+
+echo ""
+echo "=== Progress Summary ==="
+echo "Latest progress file:"
+ls -t logs/training_*_progress.json | head -1 | xargs cat | python -m json.tool
+
+echo ""
+echo "=== GPU Status ==="
+nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv
+
+echo ""
+echo "=== System Resources ==="
+echo "Memory:"
+free -h
+echo "Disk:"
+df -h .
+```
+
+#### **`check_progress.py`** - Detailed Progress Report:
+```python
+#!/usr/bin/env python3
+import json
+import glob
+import os
+from datetime import datetime
+
+def check_progress():
+    # Find latest progress file
+    progress_files = glob.glob('logs/training_*_progress.json')
+    if not progress_files:
+        print("No progress files found!")
+        return
+    
+    latest_file = max(progress_files, key=os.path.getctime)
+    
+    with open(latest_file, 'r') as f:
+        data = json.load(f)
+    
+    print(f"=== Training Progress Report ===")
+    print(f"File: {latest_file}")
+    print(f"Start time: {data['start_time']}")
+    print(f"Best loss: {data['best_loss']:.4f}")
+    print(f"Epochs completed: {len(data['epochs'])}")
+    
+    if data['epochs']:
+        latest_epoch = data['epochs'][-1]
+        print(f"Latest epoch: {latest_epoch['epoch']}")
+        print(f"Latest loss: {latest_epoch['avg_loss']:.4f}")
+        print(f"Latest learning rate: {latest_epoch['learning_rate']:.6f}")
+        print(f"Latest epoch time: {latest_epoch['time']:.2f}s")
+    
+    print(f"\n=== Epoch History ===")
+    for epoch in data['epochs']:
+        print(f"Epoch {epoch['epoch']}: Loss={epoch['avg_loss']:.4f}, "
+              f"LR={epoch['learning_rate']:.6f}, Time={epoch['time']:.2f}s")
+
+if __name__ == "__main__":
+    check_progress()
+```
 
 ### Additional Monitoring (Optional):
 ```bash
@@ -187,21 +301,24 @@ aws cloudwatch put-metric-alarm \
 ## 💾 Step 6: Model & Results Management
 
 ### Automatic Results Management:
-The `run_training.sh` script automatically:
+The enhanced training scripts automatically:
 - Creates timestamped results directory (`results_TIMESTAMP/`)
-- Saves best and final models (`s3_streaming_best.pth`, `s3_streaming_final.pth`)
+- Saves best and final models (`cost_optimized_best.pth`, `cost_optimized_final.pth`)
 - Copies training logs and GPU monitoring data
+- Saves progress tracking JSON files
 - Saves any generated plots or visualizations
 - Uploads everything to S3 at `s3://your-bucket/results/TIMESTAMP/`
 
 ### Results Structure:
 ```
 results_20241201_143022/
-├── s3_streaming_best.pth       # Best model during training
-├── s3_streaming_final.pth      # Final model
-├── training_20241201_143022.log # Training logs
-├── gpu_monitor_20241201_143022.log # GPU usage logs
-└── *.png                        # Any generated plots
+├── cost_optimized_best_epoch_1.pth      # Best model from epoch 1
+├── cost_optimized_best_epoch_2.pth      # Best model from epoch 2
+├── cost_optimized_final.pth             # Final model
+├── training_20241201_143022.log         # Training logs
+├── training_20241201_143022_progress.json # Progress tracking
+├── gpu_monitor_20241201_143022.log      # GPU usage logs
+└── *.png                                # Any generated plots
 ```
 
 ### Download Results Locally:
@@ -217,7 +334,7 @@ aws s3 sync s3://your-ad-game-data-bucket/results/20241201_143022/ ./specific_ru
 
 ### Multi-GPU Training (If Needed):
 ```python
-# Modify s3_streaming_train.py for multi-GPU
+# Modify cost_optimized_train.py for multi-GPU
 import torch.nn.parallel
 import torch.distributed as dist
 
@@ -276,23 +393,22 @@ aws ec2 authorize-security-group-ingress \
 
 ## 💰 Cost Estimation & Optimization
 
-### Expected Costs (S3 Streaming):
-- **g4dn.xlarge**: $0.526/hour
-- **20 hours training**: ~$10.52
-- **S3 API calls (streaming)**: ~$0-5
-- **Storage**: ~$2/month
-- **Total**: ~$10-15
-
 ### Cost Comparison:
-| Approach | Data Transfer | Compute | Total | Savings |
-|----------|---------------|---------|-------|---------|
-| **Old (Download)** | $180-200 | $10.52 | $190-210 | - |
-| **New (S3 Streaming)** | $0-5 | $10.52 | $10-15 | **90-95%** |
+
+| Approach | Data Transfer | Compute | Total | Time | Speed |
+|----------|---------------|---------|-------|------|-------|
+| **S3 Streaming** | $5-10 | $129.40 | **$135-140** | **246 hours** | 36s/iteration |
+| **Local Data** | $90 | $21.04 | **$111.12** | **24-40 hours** | 4-7s/iteration |
+
+### Expected Costs (Updated):
+- **S3 Streaming**: $135-140 (246 hours)
+- **Local Data**: $111.12 (24-40 hours)
+- **Spot Instances**: 60-90% savings on compute
 
 ### Cost Optimization Tips:
-1. **Use S3 Streaming**: Eliminates data transfer costs
+1. **Use Local Data**: Faster and cheaper than S3 streaming
 2. **Use Spot Instances**: 60-90% savings
-3. **Auto-stop**: Built into `run_training.sh` (20-hour limit)
+3. **Monitor Progress**: Use enhanced logging to track efficiency
 4. **Right-size storage**: Use GP3 instead of GP2
 5. **Monitor usage**: Set up CloudWatch alarms
 6. **Clean up**: Terminate instances when done
@@ -305,6 +421,7 @@ aws ec2 authorize-security-group-ingress \
 3. **GPU Driver Issues**: Use Deep Learning AMI
 4. **Network Timeouts**: Use larger instance types
 5. **S3 Access Issues**: Check IAM permissions and bucket name
+6. **Training Stops**: Check auto-stop settings and logs
 
 ### Debug Commands:
 ```bash
@@ -321,10 +438,10 @@ free -h
 ping -c 3 s3.amazonaws.com
 
 # Check training logs
-tail -f training.log
+tail -f logs/training_*.log
 
-# Check script logs
-tail -f training_TIMESTAMP.log
+# Check progress
+python check_progress.py
 
 # Test S3 access
 aws s3 ls s3://your-bucket-name/
@@ -341,6 +458,9 @@ python -c "import boto3; print('boto3 available')"
 # Test S3 streaming mode
 ./run_training.sh s3-streaming your-bucket-name
 
+# Test local data mode
+./run_training.sh aws your-bucket-name
+
 # Check script permissions
 ls -la run_training.sh
 
@@ -356,6 +476,7 @@ python -c "import torch; print(torch.cuda.is_available())"
 - Memory usage
 - Training time per epoch
 - Cost per epoch
+- Learning rate progression
 
 ### Set Up Monitoring:
 ```bash
@@ -364,6 +485,9 @@ pip install tensorboard wandb
 
 # Start TensorBoard
 tensorboard --logdir=./logs --host=0.0.0.0 --port=6006
+
+# Monitor training progress
+watch -n 300 python check_progress.py
 ```
 
 ## 🚀 Quick Start Summary
@@ -372,12 +496,40 @@ tensorboard --logdir=./logs --host=0.0.0.0 --port=6006
 2. **Upload Data**: `aws s3 sync data/ s3://your-bucket/data/`
 3. **Launch EC2**: Use g4dn.xlarge with Deep Learning AMI
 4. **Download Code**: `git clone` your repository
-5. **Run Training**: `./run_training.sh s3-streaming your-bucket-name`
-6. **Monitor**: Check logs and S3 for results
+5. **Choose Approach**:
+   - **Fast**: `./run_training.sh aws your-bucket-name` (download data first)
+   - **Cost-optimized**: `./run_training.sh s3-streaming your-bucket-name`
+6. **Monitor**: Use enhanced logging and monitoring scripts
 7. **Download Results**: `aws s3 sync s3://your-bucket/results/ ./results/`
 
 ## 📝 Complete Example Workflow
 
+### **Option A: Local Data (Recommended)**
+```bash
+# 1. Upload training data to S3 (one-time setup)
+aws s3 sync data/ s3://my-ml-bucket/data/
+
+# 2. Launch EC2 instance and connect
+ssh -i key.pem ubuntu@your-instance-ip
+
+# 3. Clone repository and download data
+git clone https://github.com/your-repo/ad_game_classifier.git
+cd ad_game_classifier
+chmod +x run_training.sh
+aws s3 sync s3://my-ml-bucket/data/ data/
+
+# 4. Run training with enhanced logging
+./run_training.sh aws my-ml-bucket
+
+# 5. Monitor progress
+tail -f logs/training_*.log
+python check_progress.py
+
+# 6. Download results locally
+aws s3 sync s3://my-ml-bucket/results/ ./downloaded_results/
+```
+
+### **Option B: S3 Streaming**
 ```bash
 # 1. Upload training data to S3 (one-time setup)
 aws s3 sync data/ s3://my-ml-bucket/data/
@@ -391,8 +543,12 @@ cd ad_game_classifier
 chmod +x run_training.sh
 ./run_training.sh s3-streaming my-ml-bucket
 
-# 4. Download results locally (optional)
+# 4. Monitor progress
+tail -f logs/training_*.log
+python check_progress.py
+
+# 5. Download results locally
 aws s3 sync s3://my-ml-bucket/results/ ./downloaded_results/
 ```
 
-The `run_training.sh` script now handles the complete workflow with S3 streaming, eliminating data transfer costs and making AWS deployment much more cost-effective!
+The enhanced training scripts now provide comprehensive logging, monitoring, and progress tracking, making it much easier to track training progress and optimize performance!

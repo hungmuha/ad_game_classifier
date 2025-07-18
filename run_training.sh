@@ -282,21 +282,25 @@ upload_to_s3() {
     fi
 }
 
-# Function to create auto-stop script (AWS only)
+# Function to create auto-stop script (AWS only) - DISABLED
 setup_auto_stop() {
     if [ "$1" = "aws" ] || [ "$1" = "s3-streaming" ]; then
-        log "Setting up auto-stop for AWS (20 hours)..."
-        cat > auto_stop.sh << 'EOF'
-#!/bin/bash
-# Auto-stop script for AWS cost control
-sleep 72000  # 20 hours
-INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
-aws ec2 stop-instances --instance-ids $INSTANCE_ID
-echo "Auto-stopping instance $INSTANCE_ID"
-EOF
-        chmod +x auto_stop.sh
-        nohup ./auto_stop.sh > auto_stop.log 2>&1 &
-        log "Auto-stop scheduled"
+        log "Auto-stop DISABLED for long training sessions..."
+        log "Training will run until completion or manual stop"
+        
+        # Comment out the auto-stop setup for long training
+        # log "Setting up auto-stop for AWS (20 hours)..."
+        # cat > auto_stop.sh << 'EOF'
+        # #!/bin/bash
+        # # Auto-stop script for AWS cost control
+        # sleep 72000  # 20 hours
+        # INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+        # aws ec2 stop-instances --instance-ids $INSTANCE_ID
+        # echo "Auto-stopping instance $INSTANCE_ID"
+        # EOF
+        # chmod +x auto_stop.sh
+        # nohup ./auto_stop.sh > auto_stop.log 2>&1 &
+        # log "Auto-stop scheduled"
     fi
 }
 
@@ -344,8 +348,8 @@ main() {
         validate_data "$mode"
     fi
     
-    # Setup auto-stop for AWS
-    setup_auto_stop "$mode"
+    # DISABLED: Auto-stop for long training sessions
+    # setup_auto_stop "$mode"
     
     # Start monitoring
     start_monitoring
