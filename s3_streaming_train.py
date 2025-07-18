@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # -------------------------------
 # S3 STREAMING CONFIGURATION
 # -------------------------------
-S3_BUCKET = "your-ad-game-data-bucket"  # Replace with your bucket
+S3_BUCKET = "nfl-ads-training"  # Replace with your bucket
 S3_DATA_PREFIX = "data"
 CLIP_DURATION = 10  # seconds
 FPS = 4  # Reduced for efficiency
