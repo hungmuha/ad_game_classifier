@@ -406,8 +406,19 @@ run_training() {
         log "Running S3 streaming training..."
         python s3_streaming_train.py 2>&1 | tee -a "$LOG_FILE"
     else
-        log "Running local/AWS training..."
-        python cost_optimized_train.py 2>&1 | tee -a "$LOG_FILE"
+        log "Running validation-enhanced training..."
+        
+        # Check for existing checkpoint
+        CHECKPOINT_FILES=$(find . -name "cost_optimized_best_epoch_*.pth" -o -name "cost_optimized_checkpoint_*.pth" | head -1)
+        
+        if [ -n "$CHECKPOINT_FILES" ]; then
+            log "Found checkpoint: $CHECKPOINT_FILES"
+            log "Resuming training with validation from checkpoint..."
+            python cost_optimized_train.py --resume "$CHECKPOINT_FILES" --upload-s3 --s3-bucket "$S3_BUCKET_NAME" 2>&1 | tee -a "$LOG_FILE"
+        else
+            log "No checkpoint found. Starting fresh training with validation..."
+            python cost_optimized_train.py --upload-s3 --s3-bucket "$S3_BUCKET_NAME" 2>&1 | tee -a "$LOG_FILE"
+        fi
     fi
 }
 
@@ -479,28 +490,36 @@ case "${1:-local}" in
         echo "Usage: $0 [local|aws|s3-streaming] [s3-bucket-name]"
         echo ""
         echo "Options:"
-        echo "  local              Run training locally (downloads data to disk)"
-        echo "  aws                Run training on AWS (downloads data to EC2)"
+        echo "  local              Run training locally with validation (downloads data to disk)"
+        echo "  aws                Run training on AWS with validation (downloads data to EC2)"
         echo "  s3-streaming       Run training with S3 streaming (NO data download!)"
         echo "  s3-bucket-name     S3 bucket name for data access"
         echo "  help               Show this help message"
         echo ""
+        echo "Training Features:"
+        echo "  ✅ Automatic checkpoint detection and resume"
+        echo "  ✅ Validation data support (separate validation dataset)"
+        echo "  ✅ Overfitting prevention with validation-based early stopping"
+        echo "  ✅ S3 upload of results and models"
+        echo "  ✅ Comprehensive logging and monitoring"
+        echo ""
         echo "Examples:"
-        echo "  $0                           # Run locally"
-        echo "  $0 local                     # Run locally"
-        echo "  $0 aws                       # Run on AWS (downloads data)"
+        echo "  $0                           # Run locally with validation"
+        echo "  $0 local                     # Run locally with validation"
+        echo "  $0 aws                       # Run on AWS with validation"
         echo "  $0 aws my-data-bucket        # Run on AWS with specific bucket"
         echo "  $0 s3-streaming              # Run with S3 streaming (cost optimized!)"
         echo "  $0 s3-streaming my-bucket    # Run S3 streaming with specific bucket"
+        echo ""
+        echo "Data Setup:"
+        echo "  1. Upload training data: aws s3 sync data/ s3://your-bucket/data/"
+        echo "  2. Upload validation data: aws s3 sync data/validation/ s3://your-bucket/data/validation/"
+        echo "  3. Run training: $0 aws your-bucket"
         echo ""
         echo "Cost Comparison:"
         echo "  local:           Downloads data to local disk"
         echo "  aws:             Downloads 2TB to EC2 (~$180-200 transfer cost)"
         echo "  s3-streaming:    Streams from S3 (~$0-5 transfer cost)"
-        echo ""
-        echo "S3 Data Setup:"
-        echo "  1. Upload data: aws s3 sync data/ s3://your-bucket/data/"
-        echo "  2. Run training: $0 s3-streaming your-bucket"
         echo ""
         echo "Logging Structure:"
         echo "  logging/"

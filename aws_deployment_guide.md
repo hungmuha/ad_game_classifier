@@ -7,6 +7,7 @@
 - [ ] Ensure corresponding WAV files exist for each MP4
 - [ ] Verify data structure matches expected format
 - [ ] Calculate total data size (should be ~200GB for 200 hours)
+- [ ] **NEW**: Prepare validation data in `data/validation/` directory (see Validation Setup section)
 
 ### 2. Code Preparation
 - [ ] All training scripts are ready (`cost_optimized_train.py` and `s3_streaming_train.py`)
@@ -24,9 +25,16 @@ s3://your-bucket-name/
 │   ├── ads/
 │   │   ├── video/          # MP4 files
 │   │   └── audio/          # WAV files
-│   └── games/
-│       ├── video/          # MP4 files
-│       └── audio/          # WAV files
+│   ├── games/
+│   │   ├── video/          # MP4 files
+│   │   └── audio/          # WAV files
+│   └── validation/         # NEW: Validation data (unseen by model)
+│       ├── ads/
+│       │   ├── video/      # MP4 files (unseen)
+│       │   └── audio/      # WAV files (unseen)
+│       └── games/
+│           ├── video/      # MP4 files (unseen)
+│           └── audio/      # WAV files (unseen)
 └── results/                # Training results (output)
     ├── 20241201_143022/    # Timestamped results
     │   ├── training/       # Training logs
@@ -51,6 +59,55 @@ aws s3 mb s3://your-ad-game-data-bucket
 
 # Upload training data (this will take several hours for 200GB)
 aws s3 sync data/ s3://your-ad-game-data-bucket/data/
+```
+
+## 🔍 Step 1.5: Validation Data Setup
+
+### Why Validation Data is Needed
+Since your model has already seen all the training data in epoch 1, we need **separate validation data** to properly evaluate the model's performance and prevent overfitting.
+
+### Local Validation Data Structure
+```
+data/
+├── ads/           (Training data - already seen by model)
+├── games/         (Training data - already seen by model)  
+└── validation/    (NEW - unseen validation data)
+    ├── ads/
+    │   ├── video/ (MP4 files - unseen)
+    │   └── audio/ (WAV files - unseen)
+    └── games/
+        ├── video/ (MP4 files - unseen)
+        └── audio/ (WAV files - unseen)
+```
+
+### Setup Validation Data Locally:
+```bash
+# 1. Check current validation data status
+python setup_validation_data.py --check
+
+# 2. Create validation directory structure
+python setup_validation_data.py --create
+
+# 3. Add validation files to the new directories:
+#    - data/validation/ads/video/ (ad video files)
+#    - data/validation/ads/audio/ (ad audio files)
+#    - data/validation/games/video/ (game video files)
+#    - data/validation/games/audio/ (game audio files)
+
+# 4. Upload validation data to S3
+python setup_validation_data.py --upload your-ad-game-data-bucket
+```
+
+### Validation Data Requirements:
+- **Size**: 10-20% of your total dataset
+- **Balance**: Equal number of ads and games
+- **Quality**: Similar to training data
+- **Unseen**: Completely separate from training data
+
+### Alternative: Upload Validation Data Directly
+```bash
+# Upload validation data to S3
+aws s3 sync data/validation/ s3://your-ad-game-data-bucket/data/validation/
 ```
 
 ### Alternative Upload Methods:
@@ -110,7 +167,7 @@ git clone https://github.com/your-repo/ad_game_classifier.git
 cd ad_game_classifier
 
 # Make training script executable
-chmod +x run_training.sh monitor_training.sh check_progress.py
+chmod +x run_training.sh check_progress.py
 ```
 
 ## 🎯 Step 4: Training Execution
@@ -197,7 +254,6 @@ The new monitoring system provides comprehensive tracking with organized logging
 ```bash
 # Start monitoring before training (in separate terminal)
 nohup nvidia-smi -l 1 > logging/session_*/monitoring/gpu_monitor_*.log &
-nohup ./monitor_training.sh &
 nohup ./check_progress.py --continuous &
 
 # Start training
@@ -237,13 +293,13 @@ python check_progress.py --continuous
 python check_progress.py --session session_20241201_143022
 ```
 
-**`monitor_training.sh` - Real-Time Monitoring:**
+**Real-Time Monitoring:**
 ```bash
-# Start monitoring
-./monitor_training.sh
+# Monitor training logs in real-time
+tail -f logging/session_*/training/*.log
 
-# Monitor in background
-nohup ./monitor_training.sh > monitoring.log 2>&1 &
+# Monitor GPU usage
+watch -n 10 nvidia-smi
 ```
 
 #### **4. Monitoring Features:**
@@ -271,7 +327,7 @@ python check_progress.py
 python check_progress.py --continuous
 
 # Monitor training process
-./monitor_training.sh
+tail -f logging/session_*/training/*.log
 
 # Check GPU usage
 watch -n 10 nvidia-smi
@@ -485,13 +541,12 @@ python -c "import boto3; print('boto3 available')"
 ./run_training.sh aws your-bucket-name
 
 # Check script permissions
-ls -la run_training.sh monitor_training.sh check_progress.py
+ls -la run_training.sh check_progress.py
 
 # Check Python environment
 python -c "import torch; print(torch.cuda.is_available())"
 
 # Check monitoring scripts
-./monitor_training.sh
 python check_progress.py
 ```
 
@@ -533,11 +588,61 @@ python check_progress.py --session session_20241201_143022
 7. **Monitor**: Use enhanced logging and monitoring scripts
 8. **Download Results**: `aws s3 sync s3://your-bucket/results/ ./results/`
 
+## 🎯 Step 4: Updated Training with Validation
+
+### **New Training Approach**
+The training now includes **validation capabilities** to prevent overfitting and provide unbiased model evaluation.
+
+### **Option A: Validation-Enhanced Training (Recommended)**
+```bash
+# Run training with validation (automatically detects checkpoint)
+./run_training.sh aws your-ad-game-data-bucket
+```
+
+**Features:**
+- ✅ **Automatic checkpoint detection** (resumes from epoch 2)
+- ✅ **Separate validation data** for unbiased evaluation
+- ✅ **Validation-based early stopping** prevents overfitting
+- ✅ **S3 upload capability** for results
+- ✅ **Single entry point** - everything flows through run_training.sh
+
+### **Option B: S3 Streaming (Cost Optimized)**
+```bash
+# Run training with S3 streaming (no data download)
+./run_training.sh s3-streaming your-ad-game-data-bucket
+```
+
+### **Option C: Local Training**
+```bash
+# Run training locally with validation
+./run_training.sh local
+```
+
+### **Training Output Example:**
+```
+Starting cost-optimized training with validation...
+Training data: {'ads': 'data/ads', 'games': 'data/games'}
+Validation data: {'ads': 'data/validation/ads', 'games': 'data/validation/games'}
+Loading training dataset...
+Loading validation dataset...
+Validation dataset loaded: 150 samples
+Train batches: 125, Validation batches: 19
+
+Epoch 1 - Train Loss: 0.6234, Val Loss: 0.5891, Val Acc: 0.6543
+Epoch 2 - Train Loss: 0.5123, Val Loss: 0.5234, Val Acc: 0.7234
+```
+
+### **Key Benefits of Validation:**
+- **Overfitting Detection**: Validation loss shows true generalization
+- **Better Early Stopping**: Stops based on validation loss (not training loss)
+- **Unbiased Evaluation**: Uses completely unseen data
+- **Performance Metrics**: Validation accuracy for model quality assessment
+
 ## 📝 Complete Example Workflow
 
-### **Option A: Local Data (Recommended)**
+### **Option A: Validation-Enhanced Training (Recommended)**
 ```bash
-# 1. Upload training data to S3 (one-time setup)
+# 1. Upload training and validation data to S3 (one-time setup)
 aws s3 sync data/ s3://my-ml-bucket/data/
 
 # 2. Launch EC2 instance and connect
@@ -546,26 +651,26 @@ ssh -i key.pem ubuntu@your-instance-ip
 # 3. Clone repository and setup monitoring
 git clone https://github.com/your-repo/ad_game_classifier.git
 cd ad_game_classifier
-chmod +x run_training.sh monitor_training.sh check_progress.py
+chmod +x run_training.sh check_progress.py
 
-# 4. Start monitoring (in separate terminals)
+# 4. Install additional dependencies
+pip install scikit-learn boto3
+
+# 5. Start monitoring (in separate terminals)
 # Terminal 1: GPU monitoring
 nohup nvidia-smi -l 1 > logging/session_*/monitoring/gpu_monitor_*.log &
 
-# Terminal 2: Training monitoring
-nohup ./monitor_training.sh &
-
-# Terminal 3: Progress checking
+# Terminal 2: Progress checking
 nohup python check_progress.py --continuous &
 
-# 5. Run training with enhanced logging
+# 6. Run validation-enhanced training (single command)
 ./run_training.sh aws my-ml-bucket
 
-# 6. Monitor progress
+# 7. Monitor progress
 tail -f logging/session_*/training/*.log
 python check_progress.py
 
-# 7. Download results locally
+# 8. Download results locally
 aws s3 sync s3://my-ml-bucket/results/ ./downloaded_results/
 ```
 
@@ -580,16 +685,13 @@ ssh -i key.pem ubuntu@your-instance-ip
 # 3. Clone repository and setup monitoring
 git clone https://github.com/your-repo/ad_game_classifier.git
 cd ad_game_classifier
-chmod +x run_training.sh monitor_training.sh check_progress.py
+chmod +x run_training.sh check_progress.py
 
 # 4. Start monitoring (in separate terminals)
 # Terminal 1: GPU monitoring
 nohup nvidia-smi -l 1 > logging/session_*/monitoring/gpu_monitor_*.log &
 
-# Terminal 2: Training monitoring
-nohup ./monitor_training.sh &
-
-# Terminal 3: Progress checking
+# Terminal 2: Progress checking
 nohup python check_progress.py --continuous &
 
 # 5. Run training with enhanced logging
@@ -621,3 +723,53 @@ tail -f logging/session_*/*.log
 ```
 
 The enhanced training scripts now provide comprehensive logging, monitoring, and progress tracking with organized directory structure, making it much easier to track training progress and optimize performance!
+
+## 🔧 Validation Troubleshooting
+
+### **No Validation Data Found**
+```bash
+# Check validation data structure
+python setup_validation_data.py --check
+
+# Create validation directories
+python setup_validation_data.py --create
+
+# Add validation files manually, then retry training
+```
+
+### **Training Fails with Validation**
+```bash
+# Check dependencies
+pip install scikit-learn boto3
+
+# Check data structure
+ls -la data/validation/ads/video/
+ls -la data/validation/games/video/
+
+# Run with fallback (uses 20% of training data)
+python cost_optimized_train.py
+```
+
+### **S3 Upload Fails**
+```bash
+# Check AWS credentials
+aws configure list
+
+# Test S3 access
+aws s3 ls s3://your-bucket-name/
+
+# Check bucket permissions
+aws s3 ls s3://your-bucket-name/data/validation/
+```
+
+### **Checkpoint Issues**
+```bash
+# List available checkpoints
+ls -la *.pth
+
+# The run_training.sh script automatically detects and uses checkpoints
+./run_training.sh aws your-bucket-name
+
+# For manual checkpoint usage (advanced)
+python cost_optimized_train.py --resume cost_optimized_best_epoch_1.pth
+```
