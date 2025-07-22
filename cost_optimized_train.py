@@ -104,7 +104,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 USE_AMP = True
 
 # S3 Configuration
-S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME', 'your-ad-game-data-bucket')
+S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME', 'nfl-ads-training')
 S3_RESULTS_PREFIX = 'results'
 
 # -------------------------------
