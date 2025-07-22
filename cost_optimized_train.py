@@ -408,7 +408,7 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
     best_train_loss = float('inf')
     best_val_loss = float('inf')
     patience_counter = 0
-    patience = 3
+    patience = 5  # Increased patience
     
     if resume_from and os.path.exists(resume_from):
         logger.info(f"Resuming from checkpoint: {resume_from}")
