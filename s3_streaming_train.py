@@ -268,7 +268,7 @@ def train_s3_streaming():
             optimizer.zero_grad()
             
             if USE_AMP:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
                     outputs = model(videos, audios)
                     loss = criterion(outputs, labels)
                 scaler.scale(loss).backward()

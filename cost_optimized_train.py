@@ -441,7 +441,7 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
             optimizer.zero_grad()
             
             if USE_AMP and scaler is not None:
-                with torch.amp.autocast():
+                with torch.amp.autocast(device_type='cuda' if torch.cuda.is_available() else 'cpu'):
                     outputs = model(videos, audios)
                     loss = criterion(outputs, labels)
                 scaler.scale(loss).backward()
