@@ -95,7 +95,7 @@ FPS = 4  # Reduced from 8 to save memory and speed
 NUM_FRAMES = CLIP_DURATION * FPS  # 40 frames instead of 80
 FRAME_SIZE = (96, 96)  # Reduced from 112x112 to save memory
 MFCC_N_MELS = 32  # Reduced from 40 to save memory
-BATCH_SIZE = 8  # Increased batch size for efficiency
+BATCH_SIZE = 16  # Increased batch size for better GPU utilization
 EPOCHS = 8  # Reduced epochs, use early stopping
 LEARNING_RATE = 2e-4  # Slightly higher for faster convergence
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -215,8 +215,8 @@ def validate_epoch(model, val_dataloader, criterion, device):
             loss = criterion(outputs, labels)
             val_loss += loss.item()
             
-            # Calculate accuracy
-            predictions = (torch.sigmoid(outputs) > 0.5).float()
+            # Calculate accuracy (no sigmoid needed since BCEWithLogitsLoss expects raw logits)
+            predictions = (outputs > 0.0).float()
             correct += (predictions == labels).sum().item()
             total += labels.size(0)
     
@@ -300,8 +300,14 @@ def load_checkpoint(model, optimizer, filename):
         else:
             # Best model file (model state dict only)
             model.load_state_dict(checkpoint)
-            logging.info(f"Best model loaded: {filename} (model only, starting from epoch 1)")
-            return 0, float('inf')  # Start from epoch 1
+            # Extract epoch number from filename
+            try:
+                epoch_num = int(filename.split('_')[-1].split('.')[0])
+                logging.info(f"Best model loaded: {filename} (model only, starting from epoch {epoch_num + 1})")
+                return epoch_num, float('inf')  # Start from next epoch
+            except:
+                logging.info(f"Best model loaded: {filename} (model only, starting from epoch 1)")
+                return 0, float('inf')  # Fallback to epoch 0
     else:
         logging.warning(f"Checkpoint not found: {filename}")
         return 0, float('inf')
@@ -383,16 +389,18 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
         train_dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=True, 
-        num_workers=4,
-        pin_memory=True
+        num_workers=8,
+        pin_memory=True,
+        prefetch_factor=2
     )
     
     val_dataloader = DataLoader(
         val_dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=False, 
-        num_workers=4,
-        pin_memory=True
+        num_workers=8,
+        pin_memory=True,
+        prefetch_factor=2
     )
     
     logger.info(f"Train batches: {len(train_dataloader)}, Validation batches: {len(val_dataloader)}")
