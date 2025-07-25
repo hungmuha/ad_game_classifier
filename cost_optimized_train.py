@@ -467,9 +467,20 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
             # Track progress
             current_lr = scheduler.get_last_lr()[0]
             tracker.log_iteration(epoch + 1, iteration + 1, loss.item(), current_lr)
+            
+            # Save safety checkpoint every 500 iterations (replaces previous safety checkpoint)
+            if iteration > 0 and iteration % 500 == 0:
+                safety_checkpoint_filename = f"cost_optimized_safety_checkpoint_epoch_{epoch+1}.pth"
+                save_checkpoint(model, optimizer, epoch + 1, loss.item(), safety_checkpoint_filename)
+                logger.info(f"Safety checkpoint saved: {safety_checkpoint_filename}")
 
         avg_train_loss = running_loss / len(train_dataloader)
         current_lr = scheduler.get_last_lr()[0]
+        
+        # Save checkpoint BEFORE validation (to prevent losing progress)
+        checkpoint_filename = f"cost_optimized_checkpoint_epoch_{epoch+1}.pth"
+        save_checkpoint(model, optimizer, epoch + 1, avg_train_loss, checkpoint_filename)
+        logger.info(f"Checkpoint saved BEFORE validation: {checkpoint_filename}")
         
         # Validation phase
         logger.info(f"Running validation for epoch {epoch+1}...")
@@ -477,10 +488,6 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
         
         logger.info(f"Epoch {epoch+1} completed - Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.4f}")
         tracker.end_epoch(epoch + 1, avg_train_loss, current_lr)
-        
-        # Save checkpoint
-        checkpoint_filename = f"cost_optimized_checkpoint_epoch_{epoch+1}.pth"
-        save_checkpoint(model, optimizer, epoch + 1, avg_val_loss, checkpoint_filename)
         
         # Early stopping based on validation loss
         if avg_val_loss < best_val_loss:
@@ -531,6 +538,7 @@ if __name__ == "__main__":
     if not args.resume:
         # Look for the most recent checkpoint (prefer full checkpoints over best models)
         checkpoint_files = [f for f in os.listdir('.') if f.startswith('cost_optimized_checkpoint_') and f.endswith('.pth')]
+        safety_checkpoint_files = [f for f in os.listdir('.') if f.startswith('cost_optimized_safety_checkpoint_') and f.endswith('.pth')]
         best_model_files = [f for f in os.listdir('.') if f.startswith('cost_optimized_best_epoch_') and f.endswith('.pth')]
         
         if checkpoint_files:
@@ -538,6 +546,11 @@ if __name__ == "__main__":
             checkpoint_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
             args.resume = checkpoint_files[-1]
             print(f"Found checkpoint: {args.resume}")
+        elif safety_checkpoint_files:
+            # Fallback to safety checkpoints
+            safety_checkpoint_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+            args.resume = safety_checkpoint_files[-1]
+            print(f"Found safety checkpoint: {args.resume}")
         elif best_model_files:
             # Fallback to best model files
             best_model_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
