@@ -89,19 +89,22 @@ class TrainingTracker:
 # COST-OPTIMIZED CONFIGURATION
 # -------------------------------
 VIDEO_DIRS = {'ads': 'data/ads', 'games': 'data/games'}
-VAL_VIDEO_DIRS = {'ads': 'data/validation/ads', 'games': 'data/validation/games'}  # Separate validation data
-CLIP_DURATION = 10  # seconds
-FPS = 4  # Reduced from 8 to save memory and speed
-NUM_FRAMES = CLIP_DURATION * FPS  # 40 frames instead of 80
-FRAME_SIZE = (96, 96)  # Reduced from 112x112 to save memory
-MFCC_N_MELS = 32  # Reduced from 40 to save memory
-BATCH_SIZE = 16  # Increased batch size for better GPU utilization
-EPOCHS = 8  # Reduced epochs, use early stopping
-LEARNING_RATE = 2e-4  # Slightly higher for faster convergence
+VAL_VIDEO_DIRS = {'ads': 'data/validation/ads', 'games': 'data/validation/games'}
+CLIP_DURATION = 10
+FPS = 3  # Reduced from 4 to 3 (minimal quality loss)
+NUM_FRAMES = CLIP_DURATION * FPS  # 30 frames instead of 40
+FRAME_SIZE = (96, 96)  # Keep original size for quality
+MFCC_N_MELS = 32  # Keep original
+BATCH_SIZE = 24  # Increased from 16 to 24 (better GPU utilization)
+EPOCHS = 8
+LEARNING_RATE = 2e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Enable mixed precision for 2x speedup and memory savings
 USE_AMP = True
+
+# Enable data caching for faster loading
+USE_CACHE = True  # Add caching
 
 # S3 Configuration
 S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME', 'nfl-ads-training')
@@ -114,6 +117,8 @@ class CostOptimizedDataset(Dataset):
     def __init__(self, video_dirs, transform=None):
         self.samples = []
         self.transform = transform
+        self.cache = {} if USE_CACHE else None  # Add cache
+        
         for label, path in enumerate(video_dirs.values()):
             video_path = path+"/video"
             audio_path = path+"/audio"
@@ -130,6 +135,10 @@ class CostOptimizedDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
+        # Check cache first
+        if self.cache is not None and idx in self.cache:
+            return self.cache[idx]
+        
         video_path, audio_path, label = self.samples[idx]
 
         # Memory-efficient frame loading
@@ -137,17 +146,17 @@ class CostOptimizedDataset(Dataset):
         frames = []
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        # Simple uniform sampling
+        # Optimized uniform sampling
         step = max(total_frames // NUM_FRAMES, 1)
         for i in range(NUM_FRAMES):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
+            frame_pos = min(i * step, total_frames - 1)  # Prevent out-of-bounds
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
             ret, frame = cap.read()
             if ret:
-                frame = cv2.resize(frame, FRAME_SIZE)
+                frame = cv2.resize(frame, FRAME_SIZE, interpolation=cv2.INTER_LINEAR)
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frames.append(frame)
             else:
-                # Use zero frame if reading fails
                 frames.append(np.zeros((FRAME_SIZE[1], FRAME_SIZE[0], 3), dtype=np.uint8))
         
         cap.release()
@@ -156,13 +165,19 @@ class CostOptimizedDataset(Dataset):
         frames = np.stack(frames).astype(np.float32) / 255.0
         frames = torch.tensor(frames).permute(0, 3, 1, 2)
 
-        # Simplified audio processing
-        y, sr = librosa.load(audio_path, sr=16000)  # Fixed sample rate
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=MFCC_N_MELS, hop_length=1024)
+        # Optimized audio processing
+        y, sr = librosa.load(audio_path, sr=16000, duration=CLIP_DURATION)  # Limit duration
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=MFCC_N_MELS, hop_length=512)  # Faster hop
         mfcc = np.mean(mfcc, axis=1)
         mfcc = torch.tensor(mfcc, dtype=torch.float32)
 
-        return frames, mfcc, torch.tensor(label, dtype=torch.float32)
+        result = (frames, mfcc, torch.tensor(label, dtype=torch.float32))
+        
+        # Cache the result
+        if self.cache is not None:
+            self.cache[idx] = result
+        
+        return result
 
 # -------------------------------
 # VALIDATION FUNCTIONS
@@ -269,22 +284,37 @@ def upload_training_results(model_files, log_files, bucket_name=None):
     return uploaded_files
 
 # -------------------------------
-# CHECKPOINT FUNCTIONS
+# ROBUST CHECKPOINT FUNCTIONS
 # -------------------------------
-def save_checkpoint(model, optimizer, epoch, loss, filename):
-    """Save training checkpoint"""
+def save_checkpoint(model, optimizer, epoch, iteration, loss, filename):
+    """Save training checkpoint with iteration tracking"""
     checkpoint = {
         'epoch': epoch,
+        'iteration': iteration,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'loss': loss,
         'timestamp': datetime.now().isoformat()
     }
     torch.save(checkpoint, filename)
-    logging.info(f"Checkpoint saved: {filename}")
+    logging.info(f"Checkpoint saved: {filename} (Epoch {epoch}, Iteration {iteration})")
+
+def save_checkpoint_with_iteration(model, optimizer, epoch, iteration, loss, filename):
+    """Save safety checkpoint during training iterations"""
+    checkpoint = {
+        'epoch': epoch,
+        'iteration': iteration,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': loss,
+        'timestamp': datetime.now().isoformat(),
+        'is_safety_checkpoint': True
+    }
+    torch.save(checkpoint, filename)
+    logging.info(f"Safety checkpoint saved: {filename} (Epoch {epoch}, Iteration {iteration})")
 
 def load_checkpoint(model, optimizer, filename):
-    """Load training checkpoint or best model"""
+    """Load training checkpoint with iteration tracking"""
     if os.path.exists(filename):
         checkpoint = torch.load(filename, map_location=DEVICE)
         
@@ -294,9 +324,15 @@ def load_checkpoint(model, optimizer, filename):
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             epoch = checkpoint['epoch']
+            iteration = checkpoint.get('iteration', 0)  # Default to 0 if not present
             loss = checkpoint['loss']
-            logging.info(f"Full checkpoint loaded: {filename} (Epoch {epoch}, Loss {loss:.4f})")
-            return epoch, loss
+            
+            # Check if it's a safety checkpoint
+            is_safety = checkpoint.get('is_safety_checkpoint', False)
+            checkpoint_type = "Safety" if is_safety else "Regular"
+            
+            logging.info(f"{checkpoint_type} checkpoint loaded: {filename} (Epoch {epoch}, Iteration {iteration}, Loss {loss:.4f})")
+            return epoch, iteration, loss
         else:
             # Best model file (model state dict only)
             model.load_state_dict(checkpoint)
@@ -304,13 +340,13 @@ def load_checkpoint(model, optimizer, filename):
             try:
                 epoch_num = int(filename.split('_')[-1].split('.')[0])
                 logging.info(f"Best model loaded: {filename} (model only, starting from epoch {epoch_num + 1})")
-                return epoch_num, float('inf')  # Start from next epoch
+                return epoch_num, 0, float('inf')  # Start from next epoch, iteration 0
             except:
                 logging.info(f"Best model loaded: {filename} (model only, starting from epoch 1)")
-                return 0, float('inf')  # Fallback to epoch 0
+                return 0, 0, float('inf')  # Fallback to epoch 0, iteration 0
     else:
         logging.warning(f"Checkpoint not found: {filename}")
-        return 0, float('inf')
+        return 0, 0, float('inf')
 
 # -------------------------------
 # LIGHTWEIGHT MODEL (Updated)
@@ -368,7 +404,7 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
     logger.info(f"Training data: {VIDEO_DIRS}")
     logger.info(f"Validation data: {VAL_VIDEO_DIRS}")
     
-    # Load training dataset (all data since model has already seen it)
+    # Load training dataset
     logger.info("Loading training dataset...")
     train_dataset = CostOptimizedDataset(VIDEO_DIRS)
     
@@ -384,7 +420,7 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
         # Use all training data since model has already seen it
         logger.info("Using separate validation dataset. Training on all available data.")
     
-    # Create dataloaders
+    # Create dataloaders with optimized settings
     train_dataloader = DataLoader(
         train_dataset, 
         batch_size=BATCH_SIZE, 
@@ -413,15 +449,16 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
     
     # Resume from checkpoint if provided
     start_epoch = 0
+    start_iteration = 0
     best_train_loss = float('inf')
     best_val_loss = float('inf')
     patience_counter = 0
-    patience = 5  # Increased patience
+    patience = 5
     
     if resume_from and os.path.exists(resume_from):
         logger.info(f"Resuming from checkpoint: {resume_from}")
-        start_epoch, best_train_loss = load_checkpoint(model, optimizer, resume_from)
-        logger.info(f"Resumed from epoch {start_epoch} with loss {best_train_loss:.4f}")
+        start_epoch, start_iteration, best_train_loss = load_checkpoint(model, optimizer, resume_from)
+        logger.info(f"Resumed from epoch {start_epoch}, iteration {start_iteration} with loss {best_train_loss:.4f}")
     
     # Learning rate scheduler
     scheduler = optim.lr_scheduler.OneCycleLR(
@@ -444,6 +481,10 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
         running_loss = 0.0
         
         for iteration, (videos, audios, labels) in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{EPOCHS}")):
+            # Skip iterations if resuming mid-epoch
+            if epoch == start_epoch and iteration < start_iteration:
+                continue
+                
             videos, audios, labels = videos.to(DEVICE), audios.to(DEVICE), labels.to(DEVICE)
 
             optimizer.zero_grad()
@@ -464,14 +505,15 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
             scheduler.step()
             running_loss += loss.item()
             
-            # Track progress
-            current_lr = scheduler.get_last_lr()[0]
-            tracker.log_iteration(epoch + 1, iteration + 1, loss.item(), current_lr)
+            # Track progress (less frequent logging)
+            if iteration % 20 == 0:
+                current_lr = scheduler.get_last_lr()[0]
+                tracker.log_iteration(epoch + 1, iteration + 1, loss.item(), current_lr)
             
-            # Save safety checkpoint every 500 iterations (replaces previous safety checkpoint)
+            # Save safety checkpoint during iterations
             if iteration > 0 and iteration % 500 == 0:
-                safety_checkpoint_filename = f"cost_optimized_safety_checkpoint_epoch_{epoch+1}.pth"
-                save_checkpoint(model, optimizer, epoch + 1, loss.item(), safety_checkpoint_filename)
+                safety_checkpoint_filename = f"cost_optimized_safety_checkpoint_epoch_{epoch+1}_iter_{iteration}.pth"
+                save_checkpoint_with_iteration(model, optimizer, epoch + 1, iteration, loss.item(), safety_checkpoint_filename)
                 logger.info(f"Safety checkpoint saved: {safety_checkpoint_filename}")
 
         avg_train_loss = running_loss / len(train_dataloader)
@@ -479,7 +521,7 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
         
         # Save checkpoint BEFORE validation (to prevent losing progress)
         checkpoint_filename = f"cost_optimized_checkpoint_epoch_{epoch+1}.pth"
-        save_checkpoint(model, optimizer, epoch + 1, avg_train_loss, checkpoint_filename)
+        save_checkpoint(model, optimizer, epoch + 1, len(train_dataloader), avg_train_loss, checkpoint_filename)
         logger.info(f"Checkpoint saved BEFORE validation: {checkpoint_filename}")
         
         # Validation phase
@@ -536,21 +578,21 @@ if __name__ == "__main__":
     
     # Check for existing checkpoint
     if not args.resume:
-        # Look for the most recent checkpoint (prefer full checkpoints over best models)
-        checkpoint_files = [f for f in os.listdir('.') if f.startswith('cost_optimized_checkpoint_') and f.endswith('.pth')]
+        # Look for the most recent checkpoint (prefer safety checkpoints for more recent progress)
         safety_checkpoint_files = [f for f in os.listdir('.') if f.startswith('cost_optimized_safety_checkpoint_') and f.endswith('.pth')]
+        checkpoint_files = [f for f in os.listdir('.') if f.startswith('cost_optimized_checkpoint_') and f.endswith('.pth')]
         best_model_files = [f for f in os.listdir('.') if f.startswith('cost_optimized_best_epoch_') and f.endswith('.pth')]
         
-        if checkpoint_files:
-            # Prefer full checkpoints for resuming
+        if safety_checkpoint_files:
+            # Prefer safety checkpoints (most recent progress)
+            safety_checkpoint_files.sort(key=lambda x: (int(x.split('_')[3]), int(x.split('_')[5].split('.')[0])))
+            args.resume = safety_checkpoint_files[-1]
+            print(f"Found safety checkpoint: {args.resume}")
+        elif checkpoint_files:
+            # Fallback to regular checkpoints
             checkpoint_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
             args.resume = checkpoint_files[-1]
             print(f"Found checkpoint: {args.resume}")
-        elif safety_checkpoint_files:
-            # Fallback to safety checkpoints
-            safety_checkpoint_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
-            args.resume = safety_checkpoint_files[-1]
-            print(f"Found safety checkpoint: {args.resume}")
         elif best_model_files:
             # Fallback to best model files
             best_model_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
