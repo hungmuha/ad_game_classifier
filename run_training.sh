@@ -501,7 +501,7 @@ run_training() {
 # Main execution
 main() {
     local mode=${1:-local}
-    local specific_checkpoint=$2 # Pass the specific checkpoint file if provided
+    local specific_checkpoint=$2
     
     log "========================================"
     log "Starting Ad/Game Classifier Training"
@@ -562,9 +562,9 @@ main() {
 case "${1:-local}" in
     "local"|"aws"|"s3-streaming")
         # Check if a specific checkpoint was provided as the last argument
-        local mode="$1"
-        local s3_bucket="${2:-your-ad-game-data-bucket}"
-        local specific_checkpoint=""
+        mode="$1"
+        s3_bucket="${2:-your-ad-game-data-bucket}"
+        specific_checkpoint=""
         
         # Check if the last argument looks like a checkpoint file
         if [ $# -gt 2 ] && [[ "${!#}" == *.pth ]]; then
