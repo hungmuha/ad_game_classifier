@@ -773,3 +773,25 @@ ls -la *.pth
 # For manual checkpoint usage (advanced)
 python cost_optimized_train.py --resume cost_optimized_best_epoch_1.pth
 ```
+
+### **Resuming from Specific Epoch**
+```bash
+# Resume from a specific checkpoint file
+./run_training.sh aws your-bucket-name cost_optimized_checkpoint_epoch_4.pth
+
+# Resume from a safety checkpoint (most recent progress)
+./run_training.sh aws your-bucket-name cost_optimized_safety_checkpoint_epoch_4_iter_500.pth
+
+# Resume from a best model file (continues from next epoch)
+./run_training.sh aws your-bucket-name cost_optimized_best_epoch_3_val.pth
+```
+
+**Checkpoint Priority:**
+1. Safety checkpoints (most recent progress)
+2. Regular checkpoints (full training state)
+3. Best model files (model only, continues from next epoch)
+
+**Examples:**
+- `cost_optimized_checkpoint_epoch_4.pth` → Continues from epoch 4
+- `cost_optimized_best_epoch_3_val.pth` → Continues from epoch 4 (next after 3)
+- `cost_optimized_safety_checkpoint_epoch_4_iter_500.pth` → Continues from epoch 4, iteration 501

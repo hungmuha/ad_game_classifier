@@ -398,9 +398,66 @@ setup_auto_stop() {
     fi
 }
 
+# Function to find the latest checkpoint
+find_latest_checkpoint() {
+    # Look for all checkpoint types and find the most recent one
+    local safety_checkpoints=$(find . -name "cost_optimized_safety_checkpoint_*.pth" 2>/dev/null)
+    local regular_checkpoints=$(find . -name "cost_optimized_checkpoint_*.pth" 2>/dev/null)
+    local best_models=$(find . -name "cost_optimized_best_epoch_*.pth" 2>/dev/null)
+    
+    local latest_checkpoint=""
+    local latest_epoch=0
+    
+    # Function to extract epoch from filename
+    extract_epoch() {
+        local filename="$1"
+        if [[ "$filename" =~ epoch_([0-9]+) ]]; then
+            echo "${BASH_REMATCH[1]}"
+        else
+            echo "0"
+        fi
+    }
+    
+    # Check safety checkpoints first (most recent progress)
+    if [ -n "$safety_checkpoints" ]; then
+        for checkpoint in $safety_checkpoints; do
+            local epoch=$(extract_epoch "$checkpoint")
+            if [ "$epoch" -gt "$latest_epoch" ]; then
+                latest_epoch=$epoch
+                latest_checkpoint="$checkpoint"
+            fi
+        done
+    fi
+    
+    # Check regular checkpoints (full training state)
+    if [ -n "$regular_checkpoints" ]; then
+        for checkpoint in $regular_checkpoints; do
+            local epoch=$(extract_epoch "$checkpoint")
+            if [ "$epoch" -gt "$latest_epoch" ]; then
+                latest_epoch=$epoch
+                latest_checkpoint="$checkpoint"
+            fi
+        done
+    fi
+    
+    # Only use best models if no checkpoints found
+    if [ -z "$latest_checkpoint" ] && [ -n "$best_models" ]; then
+        for model in $best_models; do
+            local epoch=$(extract_epoch "$model")
+            if [ "$epoch" -gt "$latest_epoch" ]; then
+                latest_epoch=$epoch
+                latest_checkpoint="$model"
+            fi
+        done
+    fi
+    
+    echo "$latest_checkpoint"
+}
+
 # Function to run training based on mode
 run_training() {
     local mode=$1
+    local specific_checkpoint=$2
     
     if [ "$mode" = "s3-streaming" ]; then
         log "Running S3 streaming training..."
@@ -408,15 +465,34 @@ run_training() {
     else
         log "Running validation-enhanced training..."
         
-        # Check for existing checkpoint
-        CHECKPOINT_FILES=$(find . -name "cost_optimized_best_epoch_*.pth" -o -name "cost_optimized_checkpoint_*.pth" | head -1)
+        # Determine which checkpoint to use
+        local checkpoint_to_use=""
         
-        if [ -n "$CHECKPOINT_FILES" ]; then
-            log "Found checkpoint: $CHECKPOINT_FILES"
-            log "Resuming training with validation from checkpoint..."
-            python cost_optimized_train.py --resume "$CHECKPOINT_FILES" --upload-s3 --s3-bucket "$S3_BUCKET_NAME" 2>&1 | tee -a "$LOG_FILE"
+        if [ -n "$specific_checkpoint" ]; then
+            # Use the specific checkpoint provided
+            if [ -f "$specific_checkpoint" ]; then
+                checkpoint_to_use="$specific_checkpoint"
+                log "Using specified checkpoint: $checkpoint_to_use"
+            else
+                log "ERROR: Specified checkpoint '$specific_checkpoint' not found!"
+                exit 1
+            fi
         else
-            log "No checkpoint found. Starting fresh training with validation..."
+            # Find the latest checkpoint automatically
+            checkpoint_to_use=$(find_latest_checkpoint)
+            
+            if [ -n "$checkpoint_to_use" ]; then
+                log "Found latest checkpoint: $checkpoint_to_use"
+                log "Resuming training with validation from checkpoint..."
+            else
+                log "No checkpoint found. Starting fresh training with validation..."
+            fi
+        fi
+        
+        # Run training with or without checkpoint
+        if [ -n "$checkpoint_to_use" ]; then
+            python cost_optimized_train.py --resume "$checkpoint_to_use" --upload-s3 --s3-bucket "$S3_BUCKET_NAME" 2>&1 | tee -a "$LOG_FILE"
+        else
             python cost_optimized_train.py --upload-s3 --s3-bucket "$S3_BUCKET_NAME" 2>&1 | tee -a "$LOG_FILE"
         fi
     fi
@@ -425,6 +501,7 @@ run_training() {
 # Main execution
 main() {
     local mode=${1:-local}
+    local specific_checkpoint=$2 # Pass the specific checkpoint file if provided
     
     log "========================================"
     log "Starting Ad/Game Classifier Training"
@@ -462,7 +539,7 @@ main() {
     
     # Run training
     log "Starting training..."
-    run_training "$mode"
+    run_training "$mode" "$specific_checkpoint"
     
     # Stop monitoring
     stop_monitoring
@@ -484,32 +561,52 @@ main() {
 # Handle script arguments
 case "${1:-local}" in
     "local"|"aws"|"s3-streaming")
-        main "$1"
+        # Check if a specific checkpoint was provided as the last argument
+        local mode="$1"
+        local s3_bucket="${2:-your-ad-game-data-bucket}"
+        local specific_checkpoint=""
+        
+        # Check if the last argument looks like a checkpoint file
+        if [ $# -gt 2 ] && [[ "${!#}" == *.pth ]]; then
+            specific_checkpoint="${!#}"
+            # Remove the checkpoint from arguments so it doesn't interfere with S3 bucket
+            set -- "${@:1:$(($#-1))}"
+        fi
+        
+        main "$mode" "$specific_checkpoint"
         ;;
     "help"|"-h"|"--help")
-        echo "Usage: $0 [local|aws|s3-streaming] [s3-bucket-name]"
+        echo "Usage: $0 [local|aws|s3-streaming] [s3-bucket-name] [checkpoint-file.pth]"
         echo ""
         echo "Options:"
         echo "  local              Run training locally with validation (downloads data to disk)"
         echo "  aws                Run training on AWS with validation (downloads data to EC2)"
         echo "  s3-streaming       Run training with S3 streaming (NO data download!)"
         echo "  s3-bucket-name     S3 bucket name for data access"
+        echo "  checkpoint-file.pth Specific checkpoint file to resume from"
         echo "  help               Show this help message"
         echo ""
         echo "Training Features:"
-        echo "  ✅ Automatic checkpoint detection and resume"
+        echo "  ✅ Automatic latest checkpoint detection and resume"
+        echo "  ✅ Manual checkpoint specification"
         echo "  ✅ Validation data support (separate validation dataset)"
         echo "  ✅ Overfitting prevention with validation-based early stopping"
         echo "  ✅ S3 upload of results and models"
         echo "  ✅ Comprehensive logging and monitoring"
         echo ""
         echo "Examples:"
-        echo "  $0                           # Run locally with validation"
-        echo "  $0 local                     # Run locally with validation"
-        echo "  $0 aws                       # Run on AWS with validation"
+        echo "  $0                           # Run locally, auto-detect latest checkpoint"
+        echo "  $0 local                     # Run locally, auto-detect latest checkpoint"
+        echo "  $0 aws                       # Run on AWS, auto-detect latest checkpoint"
         echo "  $0 aws my-data-bucket        # Run on AWS with specific bucket"
-        echo "  $0 s3-streaming              # Run with S3 streaming (cost optimized!)"
+        echo "  $0 aws my-bucket cost_optimized_checkpoint_epoch_4.pth  # Use specific checkpoint"
+        echo "  $0 s3-streaming              # Run with S3 streaming"
         echo "  $0 s3-streaming my-bucket    # Run S3 streaming with specific bucket"
+        echo ""
+        echo "Checkpoint Priority:"
+        echo "  1. Safety checkpoints (most recent progress)"
+        echo "  2. Regular checkpoints (full training state)"
+        echo "  3. Best model files (model only, starts from epoch 1)"
         echo ""
         echo "Data Setup:"
         echo "  1. Upload training data: aws s3 sync data/ s3://your-bucket/data/"

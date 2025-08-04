@@ -336,14 +336,16 @@ def load_checkpoint(model, optimizer, filename):
         else:
             # Best model file (model state dict only)
             model.load_state_dict(checkpoint)
-            # Extract epoch number from filename
+            
+            # Extract epoch number from filename and continue from next epoch
             try:
                 epoch_num = int(filename.split('_')[-1].split('.')[0])
-                logging.info(f"Best model loaded: {filename} (model only, starting from epoch {epoch_num + 1})")
-                return epoch_num, 0, float('inf')  # Start from next epoch, iteration 0
+                next_epoch = epoch_num + 1  # Continue from next epoch
+                logging.info(f"Best model loaded: {filename} (model only, continuing from epoch {next_epoch})")
+                return next_epoch, 0, float('inf')  # Start from next epoch, iteration 0
             except:
-                logging.info(f"Best model loaded: {filename} (model only, starting from epoch 1)")
-                return 0, 0, float('inf')  # Fallback to epoch 0, iteration 0
+                logging.info(f"Best model loaded: {filename} (model only, continuing from epoch 1)")
+                return 1, 0, float('inf')  # Fallback to epoch 1, iteration 0
     else:
         logging.warning(f"Checkpoint not found: {filename}")
         return 0, 0, float('inf')
@@ -583,33 +585,25 @@ if __name__ == "__main__":
         checkpoint_files = [f for f in os.listdir('.') if f.startswith('cost_optimized_checkpoint_') and f.endswith('.pth')]
         best_model_files = [f for f in os.listdir('.') if f.startswith('cost_optimized_best_epoch_') and f.endswith('.pth')]
         
+        # Debug: Print what files were found
+        print(f"Debug: Found safety checkpoint files: {safety_checkpoint_files}")
+        print(f"Debug: Found checkpoint files: {checkpoint_files}")
+        print(f"Debug: Found best model files: {best_model_files}")
+        
         if safety_checkpoint_files:
             # Prefer safety checkpoints (most recent progress)
             safety_checkpoint_files.sort(key=lambda x: (int(x.split('_')[3]), int(x.split('_')[5].split('.')[0])))
             args.resume = safety_checkpoint_files[-1]
             print(f"Found safety checkpoint: {args.resume}")
         elif checkpoint_files:
-            # Check if we have a checkpoint with higher epoch than best model files
+            # ALWAYS prefer regular checkpoints over best model files
+            # Regular checkpoints contain full training state (optimizer, epoch, etc.)
             checkpoint_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
-            latest_checkpoint_epoch = int(checkpoint_files[-1].split('_')[-1].split('.')[0])
-            
-            if best_model_files:
-                best_model_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
-                latest_best_epoch = int(best_model_files[-1].split('_')[-1].split('.')[0])
-                
-                # Prefer checkpoint if it has higher or equal epoch number
-                if latest_checkpoint_epoch >= latest_best_epoch:
-                    args.resume = checkpoint_files[-1]
-                    print(f"Found checkpoint with higher epoch: {args.resume}")
-                else:
-                    args.resume = best_model_files[-1]
-                    print(f"Found best model with higher epoch: {args.resume}")
-                    print("Note: This is a best model file (model only). Training will start from epoch 1.")
-            else:
-                args.resume = checkpoint_files[-1]
-                print(f"Found checkpoint: {args.resume}")
+            args.resume = checkpoint_files[-1]
+            print(f"Found checkpoint: {args.resume}")
+            print(f"Note: This checkpoint contains full training state and will resume from the correct epoch.")
         elif best_model_files:
-            # Fallback to best model files
+            # Only use best model files if no checkpoints exist
             best_model_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
             args.resume = best_model_files[-1]
             print(f"Found best model: {args.resume}")
