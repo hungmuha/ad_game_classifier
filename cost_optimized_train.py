@@ -589,10 +589,25 @@ if __name__ == "__main__":
             args.resume = safety_checkpoint_files[-1]
             print(f"Found safety checkpoint: {args.resume}")
         elif checkpoint_files:
-            # Fallback to regular checkpoints
+            # Check if we have a checkpoint with higher epoch than best model files
             checkpoint_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
-            args.resume = checkpoint_files[-1]
-            print(f"Found checkpoint: {args.resume}")
+            latest_checkpoint_epoch = int(checkpoint_files[-1].split('_')[-1].split('.')[0])
+            
+            if best_model_files:
+                best_model_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+                latest_best_epoch = int(best_model_files[-1].split('_')[-1].split('.')[0])
+                
+                # Prefer checkpoint if it has higher or equal epoch number
+                if latest_checkpoint_epoch >= latest_best_epoch:
+                    args.resume = checkpoint_files[-1]
+                    print(f"Found checkpoint with higher epoch: {args.resume}")
+                else:
+                    args.resume = best_model_files[-1]
+                    print(f"Found best model with higher epoch: {args.resume}")
+                    print("Note: This is a best model file (model only). Training will start from epoch 1.")
+            else:
+                args.resume = checkpoint_files[-1]
+                print(f"Found checkpoint: {args.resume}")
         elif best_model_files:
             # Fallback to best model files
             best_model_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
