@@ -95,16 +95,13 @@ FPS = 4  # Back to original for better quality
 NUM_FRAMES = CLIP_DURATION * FPS  # 40 frames (10 seconds × 4 FPS)
 FRAME_SIZE = (96, 96)  # Keep original size for quality
 MFCC_N_MELS = 32  # Keep original
-BATCH_SIZE = 16  # Reduced to compensate for more frames
+BATCH_SIZE = 24  # Back to original batch size
 EPOCHS = 8
 LEARNING_RATE = 2e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Enable mixed precision for 2x speedup and memory savings
 USE_AMP = True
-
-# Enable data caching for faster loading
-USE_CACHE = True  # Add caching
 
 # S3 Configuration
 S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME', 'nfl-ads-training')
@@ -117,7 +114,6 @@ class CostOptimizedDataset(Dataset):
     def __init__(self, video_dirs, transform=None):
         self.samples = []
         self.transform = transform
-        self.cache = {} if USE_CACHE else None  # Add cache
         
         for label, path in enumerate(video_dirs.values()):
             video_path = path+"/video"
@@ -135,10 +131,6 @@ class CostOptimizedDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        # Check cache first
-        if self.cache is not None and idx in self.cache:
-            return self.cache[idx]
-        
         video_path, audio_path, label = self.samples[idx]
 
         # Memory-efficient frame loading
@@ -172,10 +164,6 @@ class CostOptimizedDataset(Dataset):
         mfcc = torch.tensor(mfcc, dtype=torch.float32)
 
         result = (frames, mfcc, torch.tensor(label, dtype=torch.float32))
-        
-        # Cache the result
-        if self.cache is not None:
-            self.cache[idx] = result
         
         return result
 
@@ -422,25 +410,23 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
         # Use all training data since model has already seen it
         logger.info("Using separate validation dataset. Training on all available data.")
     
-    # Create dataloaders with optimized settings
+    # Create dataloaders with original settings (back to normal)
     train_dataloader = DataLoader(
         train_dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=True, 
-        num_workers=2,  # Reduced from 4 to 2
-        pin_memory=True,
-        prefetch_factor=1,  # Reduced from 2 to 1
-        persistent_workers=True  # Add this to keep workers alive
+        num_workers=4,  # Back to original
+        pin_memory=True,  # Back to original
+        prefetch_factor=2  # Back to original
     )
     
     val_dataloader = DataLoader(
         val_dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=False, 
-        num_workers=2,  # Reduced from 4 to 2
-        pin_memory=True,
-        prefetch_factor=1,  # Reduced from 2 to 1
-        persistent_workers=True  # Add this to keep workers alive
+        num_workers=4,  # Back to original
+        pin_memory=True,  # Back to original
+        prefetch_factor=2  # Back to original
     )
     
     logger.info(f"Train batches: {len(train_dataloader)}, Validation batches: {len(val_dataloader)}")
