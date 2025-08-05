@@ -91,11 +91,11 @@ class TrainingTracker:
 VIDEO_DIRS = {'ads': 'data/ads', 'games': 'data/games'}
 VAL_VIDEO_DIRS = {'ads': 'data/validation/ads', 'games': 'data/validation/games'}
 CLIP_DURATION = 10
-FPS = 3  # Reduced from 4 to 3 (minimal quality loss)
-NUM_FRAMES = CLIP_DURATION * FPS  # 30 frames instead of 40
+FPS = 4  # Back to original for better quality
+NUM_FRAMES = CLIP_DURATION * FPS  # 40 frames (10 seconds × 4 FPS)
 FRAME_SIZE = (96, 96)  # Keep original size for quality
 MFCC_N_MELS = 32  # Keep original
-BATCH_SIZE = 24  # Increased from 16 to 24 (better GPU utilization)
+BATCH_SIZE = 16  # Reduced to compensate for more frames
 EPOCHS = 8
 LEARNING_RATE = 2e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -427,18 +427,20 @@ def train_cost_optimized(resume_from=None, upload_to_s3_flag=False):
         train_dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=True, 
-        num_workers=4,
+        num_workers=2,  # Reduced from 4 to 2
         pin_memory=True,
-        prefetch_factor=2
+        prefetch_factor=1,  # Reduced from 2 to 1
+        persistent_workers=True  # Add this to keep workers alive
     )
     
     val_dataloader = DataLoader(
         val_dataset, 
         batch_size=BATCH_SIZE, 
         shuffle=False, 
-        num_workers=4,
+        num_workers=2,  # Reduced from 4 to 2
         pin_memory=True,
-        prefetch_factor=2
+        prefetch_factor=1,  # Reduced from 2 to 1
+        persistent_workers=True  # Add this to keep workers alive
     )
     
     logger.info(f"Train batches: {len(train_dataloader)}, Validation batches: {len(val_dataloader)}")
