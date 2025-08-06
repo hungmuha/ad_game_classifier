@@ -95,7 +95,7 @@ FPS = 4  # Back to original for better quality
 NUM_FRAMES = CLIP_DURATION * FPS  # 40 frames (10 seconds × 4 FPS)
 FRAME_SIZE = (96, 96)  # Keep original size for quality
 MFCC_N_MELS = 32  # Keep original
-BATCH_SIZE = 24  # Back to original batch size
+BATCH_SIZE = 16  # Back to original batch size
 EPOCHS = 8
 LEARNING_RATE = 2e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -138,14 +138,13 @@ class CostOptimizedDataset(Dataset):
         frames = []
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        # Optimized uniform sampling
+         # Simple uniform sampling
         step = max(total_frames // NUM_FRAMES, 1)
         for i in range(NUM_FRAMES):
-            frame_pos = min(i * step, total_frames - 1)  # Prevent out-of-bounds
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_pos)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i * step)
             ret, frame = cap.read()
             if ret:
-                frame = cv2.resize(frame, FRAME_SIZE, interpolation=cv2.INTER_LINEAR)
+                frame = cv2.resize(frame, FRAME_SIZE)
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frames.append(frame)
             else:
@@ -157,15 +156,13 @@ class CostOptimizedDataset(Dataset):
         frames = np.stack(frames).astype(np.float32) / 255.0
         frames = torch.tensor(frames).permute(0, 3, 1, 2)
 
-        # Optimized audio processing
-        y, sr = librosa.load(audio_path, sr=16000, duration=CLIP_DURATION)  # Limit duration
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=MFCC_N_MELS, hop_length=512)  # Faster hop
+        # Simplified audio processing
+        y, sr = librosa.load(audio_path, sr=16000)  # Fixed sample rate
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=MFCC_N_MELS, hop_length=1024)
         mfcc = np.mean(mfcc, axis=1)
         mfcc = torch.tensor(mfcc, dtype=torch.float32)
 
-        result = (frames, mfcc, torch.tensor(label, dtype=torch.float32))
-        
-        return result
+        return frames, mfcc, torch.tensor(label, dtype=torch.float32)
 
 # -------------------------------
 # VALIDATION FUNCTIONS
